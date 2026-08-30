@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "test"]
  :tasks
  {:requires ([babashka.process :as p])
 
@@ -19,13 +19,21 @@
    :task (shell "node" "test/extension_test.js")}
 
   test:analyzer
-  {:doc "The patched analyzer helper (step 1). Needs a Flutter project."
+  {:doc "The patched analyzer helper (step 1), against test/fixture. Needs a Dart SDK."
    :task (apply shell "bb" "test/analyzer_test.clj" *command-line-args*)}
 
   test:resolve
-  {:doc "The daemon end to end (step 2). Needs a Flutter project."
+  {:doc "The daemon end to end (step 2), against test/fixture. Needs a Dart SDK."
    :task (apply shell "bb" "test/resolve_test.clj" *command-line-args*)}
 
+  test:flutter
+  {:doc "The optional tier: the same two suites against a real Flutter project.
+  bb test:flutter /path/to/cljd-project   (or set CLJD_TEST_PROJECT)"
+   :task (let [env {:extra-env {"CLJD_TEST_TARGET" "flutter"}}]
+           (apply shell env "bb" "test/analyzer_test.clj" *command-line-args*)
+           (apply shell env "bb" "test/resolve_test.clj" *command-line-args*))}
+
   test
-  {:doc "Everything."
+  {:doc "Everything that runs without a Flutter SDK. Suites needing a Dart SDK
+  skip when there is none -- set CLJD_TEST_STRICT=1 to make that a failure."
    :depends [test:parse test:registry test:extension test:analyzer test:resolve]}}}

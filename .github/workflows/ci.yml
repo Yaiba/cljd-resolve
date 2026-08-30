@@ -1,0 +1,77 @@
+# Three tiers, cheapest first (cljd-resolve-1sf.1).
+#
+#   core     the suites that need neither Dart nor Flutter -- syntax, the
+#            analyzer registry's supervision rules, the extension client
+#   dart     the analyzer helper and the daemon end to end, against the
+#            checked-in fixture in test/fixture
+#   flutter  the same two suites against a real Flutter app, which is slow
+#            and pins us to an SDK release, so it is on demand and weekly
+#            rather than on every push
+#
+# CLJD_TEST_STRICT turns "no SDK, skipping" into a failure: locally a skip
+# keeps `bb test` green, but a tier that installed an SDK and then skipped
+# would be a silently empty CI job.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: syntax, registry, extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install babashka
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: latest
+      - run: bb test:parse
+      - run: bb test:registry
+      - run: bb test:extension
+
+  dart:
+    name: analyzer + resolve (fixture)
+    runs-on: ubuntu-latest
+    env:
+      CLJD_TEST_STRICT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - name: Install babashka
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: latest
+      - run: bb test:analyzer
+      - run: bb test:resolve
+
+  flutter:
+    name: analyzer + resolve (real Flutter SDK)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      CLJD_TEST_STRICT: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Install babashka
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: latest
+      - name: Create a throwaway Flutter project for the analyzer to resolve against
+        run: flutter create "$RUNNER_TEMP/hello"
+      - run: bb test:flutter "$RUNNER_TEMP/hello"

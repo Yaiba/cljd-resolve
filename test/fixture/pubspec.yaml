@@ -1,0 +1,13 @@
+# A tiny, dependency-free Dart package that stands in for a Flutter project in
+# the analyzer and resolve suites (cljd-resolve-1sf.1).
+#
+# It exists so `bb test` runs on a clean checkout with a Dart SDK and nothing
+# else: `lib/widgets.dart` mirrors the *shapes* the suites probe in
+# package:flutter/material.dart -- a documented class whose `this.x` named
+# parameters inherit their field's doc, a static const on a class, an enum, an
+# abstract getter -- under names of its own.
+name: cljd_resolve_fixture
+publish_to: none
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'

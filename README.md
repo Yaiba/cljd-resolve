@@ -20,7 +20,7 @@ vendor/     the pristine upstream analyzer.dart, for `diff`
 src/        the resolve daemon (step 2)
 bin/        cljd-resolve -- launches the daemon
 extension/  the VSCode extension (steps 3 and 4)
-test/       four suites; `bb test` runs them all
+test/       five suites plus test/fixture, the Dart project they run against
 ```
 
 ## Step 1 — the patched analyzer helper
@@ -298,20 +298,49 @@ unchanged everywhere.
 ## Tests
 
 ```bash
-bb test                      # all four suites
+bb test                      # everything that does not need a Flutter SDK
 bb test:parse                # syntax only -- no Dart, instant
+bb test:registry             # the analyzer registry's supervision rules, no Dart
 bb test:extension            # the extension, no VSCode and no Dart, instant
 bb test:analyzer [project]   # the patched helper (step 1)
 bb test:resolve  [project]   # the daemon end to end (step 2)
+bb test:flutter  [project]   # the last two again, against a real Flutter SDK
 ```
 
-The project defaults to `../cljd/hello`. All four print one line per check and exit non-zero on
-failure.
+Every suite prints one line per check and exits non-zero on failure.
 
-**`test/analyzer_test.clj`** — 30 checks against a real Flutter SDK. Beyond presence, every
+The two integration suites run against a **target**: a Dart project, plus the names of the
+declarations to probe in it (`test/cljd_resolve/test_target.clj`). There are two.
+
+`fixture` is the default — `test/fixture`, a checked-in, dependency-free Dart package whose
+`lib/widgets.dart` mirrors the *shapes* the suites care about (a documented class whose
+`this.x` named parameters inherit their field's doc, a static const reached through a dotted
+alias, an enum, an abstract getter) under names of its own: `App`, `Panel`, `Label`,
+`Palette/red`. It needs a Dart SDK and nothing else, and `dart pub get` is run for you on
+first use, so `bb test` works on a clean checkout.
+
+`flutter` is the same assertions against `package:flutter/material.dart` — `MaterialApp`,
+`Scaffold`, `Text`, `Colors.red`. It needs a real Flutter project, named as the suite's first
+argument or in `CLJD_TEST_PROJECT`; naming one selects this target, and `CLJD_TEST_TARGET`
+overrides that either way.
+
+A suite that cannot run — no `dart` on `PATH`, or no project for the flutter tier — prints
+`SKIP` and passes, so a machine without the SDK still gets the rest. `CLJD_TEST_STRICT=1`
+turns those skips into failures; CI sets it on the tiers that just installed an SDK, where a
+skip would mean a silently empty job.
+
+`.github/workflows/ci.yml` runs the three no-SDK suites and the fixture tier on every push. The
+flutter tier is weekly and on demand, against a throwaway `flutter create` app -- it is slow and
+pins us to an SDK release, and nothing in it is a regression the fixture tier would miss.
+
+**`test/analyzer_test.clj`** — 25-odd checks against the target library. Beyond presence, every
 `:offset`/`:length` is spot-checked by seeking into the named file and confirming the characters
-there really are the element's name, and the whole `Scaffold` payload is read back through
+there really are the element's name, and the target's fattest class is read back whole through
 `clojure.edn` to prove the escaping holds.
+
+**`test/registry_test.clj`** — the analyzer registry with the process layer stubbed out: one
+`dart run` per root under concurrency, a dead helper stopped before it is replaced, and a broken
+helper backed off rather than recompiled on every hover. No Dart.
 
 **`test/parse_test.clj`** — the alias table, symbol classification, owner candidates, unbalanced
 buffers, Dart rendering, and offset → line/column. No subprocess, so it runs in a blink.

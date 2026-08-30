@@ -1,27 +1,29 @@
 #!/usr/bin/env bb
 ;; Regression test for the patched helper (design.md §4 step 1).
 ;;
-;;   bb test/analyzer_test.clj [flutter-project-dir]
+;;   bb test/analyzer_test.clj [dart-project-dir]
 ;;
 ;; Drives bin/analyzer.dart over its stdin protocol and asserts that the
 ;; :doc / :file / :offset / :length we added actually show up -- and that the
 ;; whole EDN payload still reads back cleanly.
+;;
+;; Runs against the checked-in fixture by default (Dart SDK, nothing else).
+;; Name a Flutter project -- an argument, or CLJD_TEST_PROJECT -- to run the
+;; same assertions against package:flutter/material.dart instead. See
+;; cljd-resolve.test-target.
 
 (require '[babashka.process :as p]
+         '[cljd-resolve.test-target :as t :refer [check head prefix?]]
          '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io])
 
-(def project (or (first *command-line-args*) "/Users/gavin/code/vibe/cljd/hello"))
-(def helper (str (.getCanonicalPath (io/file "helper")) "/bin/analyzer.dart"))
+(def target (t/begin! "analyzer_test" *command-line-args*))
+(def project (:project target))
+(def v (:vocab target))
+(def lib (:lib v))
 
-(def failures (atom 0))
-
-(defn check [ok? label & [extra]]
-  (if ok?
-    (println "  ok  " label)
-    (do (swap! failures inc)
-        (println "  FAIL" label (if extra (str "-- " (pr-str extra)) "")))))
+(def helper (str (.getCanonicalPath (io/file (t/repo-root) "helper")) "/bin/analyzer.dart"))
 
 ;; ---------------------------------------------------------------- protocol
 
@@ -39,6 +41,8 @@
   (.write in (str cmd "\n"))
   (.flush in)
   (edn/read {:eof ::eof} out))
+
+(defn elt [name] (ask (str "elt " lib " " name)))
 
 (def banner (edn/read out))                 ; {:dart "..."}
 (check (string? (:dart banner)) "startup banner carries :dart version" banner)
@@ -64,40 +68,39 @@
 
 ;; ---------------------------------------------------------------- tests
 
-(println "\nlib package:flutter/material.dart")
-(check (true? (ask "lib package:flutter/material.dart")) "material.dart resolves")
+(println "\nlib" lib)
+(check (true? (ask (str "lib " lib))) "the target library resolves")
 
-(println "\nelt package:flutter/material.dart Text")
-(let [text (ask "elt package:flutter/material.dart Text")
-      ctor (get text "Text")
-      style-param (->> (:parameters ctor) (filter #(= 'style (:name %))) first)
-      style-field (get text "style")]
-  (check (str/starts-with? (:doc text) "A run of text with a single style.")
-         "class doc, comment markers stripped" (subs (str (:doc text)) 0 40))
+(println "\nelt" lib (:text v))
+(let [text (elt (:text v))
+      ctor (get text (:text v))
+      style-param (->> (:parameters ctor)
+                       (filter #(= (:style-param v) (str (:name %))))
+                       first)
+      style-field (get text (:style-param v))]
+  (check (prefix? (:doc text) (:text-doc v))
+         "class doc, comment markers stripped" (head (:doc text) 40))
   (check (not (str/includes? (:doc text) "///")) "no /// left in class doc")
-  (check (spot-check-offset text "Text") "class :offset/:length point at `Text`"
+  (check (spot-check-offset text (:text v)) "class :offset/:length point at the class name"
          (select-keys text [:file :offset :length]))
   (check (some? ctor) "constructor is present")
   (check (located? ctor) "constructor is located" (select-keys ctor [:file :offset :length]))
-  (check (some? style-param) "constructor has a `style` named parameter")
-  (check (str/starts-with? (str (:doc style-param)) "If non-null, the style to use")
-         "`this.style` parameter inherits the field's doc"
-         (some-> (:doc style-param) (subs 0 (min 40 (count (:doc style-param))))))
-  (check (spot-check-offset style-param "style") "parameter :offset points at `style`")
-  (check (str/starts-with? (str (:doc style-field)) "If non-null, the style to use")
-         "field `style` has its doc")
-  (check (spot-check-offset style-field "style") "field :offset points at `style`")
-  (let [build (get text "build")]
-    (check (located? build) "method `build` is located")
-    (check (spot-check-offset build "build") "method :offset points at `build`")))
+  (check (some? style-param) (str "constructor has a `" (:style-param v) "` named parameter"))
+  (check (prefix? (:doc style-param) (:style-doc v))
+         "`this.style` parameter inherits the field's doc" (head (:doc style-param) 40))
+  (check (spot-check-offset style-param (:style-param v)) "parameter :offset points at its name")
+  (check (prefix? (:doc style-field) (:style-doc v)) "the field itself has its doc")
+  (check (spot-check-offset style-field (:style-param v)) "field :offset points at its name")
+  (let [build (get text (:method v))]
+    (check (located? build) (str "method `" (:method v) "` is located"))
+    (check (spot-check-offset build (:method v)) "method :offset points at its name")))
 
-(println "\nelt package:flutter/material.dart Colors  (m.Colors/red)")
-(let [colors (ask "elt package:flutter/material.dart Colors")
-      red (get colors "red")]
-  (check (some? red) "static field `red` is present")
-  (check (string? (:doc red)) "`red` has a doc"
-         (some-> (:doc red) (subs 0 (min 60 (count (:doc red))))))
-  (check (spot-check-offset red "red") "`red` :offset points at `red`"))
+(println "\nelt" lib (:colors v) " (a static member, as in m.Colors/red)")
+(let [colors (elt (:colors v))
+      red (get colors (:color-field v))]
+  (check (some? red) (str "static field `" (:color-field v) "` is present"))
+  (check (string? (:doc red)) "the static field has a doc" (head (:doc red)))
+  (check (spot-check-offset red (:color-field v)) "its :offset points at its name"))
 
 (println "\nelt dart:math max  (top-level function)")
 (let [m (ask "elt dart:math max")]
@@ -110,35 +113,32 @@
   (check (string? (:doc m)) "top-level variable has a doc")
   (check (spot-check-offset m "pi") "top-level variable is located"))
 
-(println "\nelt package:flutter/material.dart MainAxisAlignment  (enum)")
-(let [m (ask "elt package:flutter/material.dart MainAxisAlignment")
-      center (get m "center")]
+(println "\nelt" lib (:enum v) " (enum)")
+(let [m (elt (:enum v))
+      value (get m (:enum-value v))]
   (check (string? (:doc m)) "enum has a doc")
-  (check (string? (:doc center)) "enum value `center` has a doc")
-  (check (spot-check-offset center "center") "enum value is located"))
+  (check (string? (:doc value)) (str "enum value `" (:enum-value v) "` has a doc"))
+  (check (spot-check-offset value (:enum-value v)) "enum value is located"))
 
-(println "\nelt package:flutter/material.dart BuildContext  (abstract / getters)")
-(let [m (ask "elt package:flutter/material.dart BuildContext")
-      widget (get m "widget")]
-  (check (string? (:doc widget)) "synthetic field from `get widget` still has a doc")
-  (check (spot-check-offset widget "widget") "synthetic field resolves to its accessor's position"))
+(println "\nelt" lib (:context v) " (abstract / getters)")
+(let [m (elt (:context v))
+      widget (get m (:context-getter v))]
+  (check (string? (:doc widget)) "synthetic field from a getter still has a doc")
+  (check (spot-check-offset widget (:context-getter v))
+         "synthetic field resolves to its accessor's position"))
 
-(println "\nelt package:flutter/material.dart Scaffold  (bulk EDN round-trip)")
-(let [m (ask "elt package:flutter/material.dart Scaffold")]
-  (check (map? m) "Scaffold parses")
+(println "\nelt" lib (:panel v) " (bulk EDN round-trip)")
+(let [m (elt (:panel v))]
+  (check (map? m) (str (:panel v) " parses"))
   (check (every? #(or (not (map? %)) (not (contains? % :doc)) (string? (:doc %)))
                  (tree-seq coll? seq m))
          "every :doc in the tree is a string (escaping holds)"))
 
-(println "\nelt package:flutter/material.dart NoSuchThingHere")
-(check (nil? (ask "elt package:flutter/material.dart NoSuchThingHere")) "unknown element -> nil")
+(println "\nelt" lib t/unknown-element)
+(check (nil? (elt t/unknown-element)) "unknown element -> nil")
 
 ;; ----------------------------------------------------------------
 
 (.close in)
 @proc
-(println)
-(if (zero? @failures)
-  (println "all checks passed")
-  (println @failures "check(s) FAILED"))
-(System/exit (if (zero? @failures) 0 1))
+(t/finish!)
