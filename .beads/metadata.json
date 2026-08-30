@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "cljd_resolve",
+  "project_id": "4e57babb-3265-4a60-861e-e35f06c3e915"
+}
