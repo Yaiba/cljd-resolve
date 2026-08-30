@@ -135,7 +135,8 @@ resolves the libraries its `ns` form requires, answering `{ok, libs}` when they 
 
 | in the buffer | resolves to |
 |---|---|
-| `m/Text` | class `Text` in the aliased library |
+| `(m/Text ...)` | the **unnamed constructor** of `Text` — see below |
+| `m/Text` elsewhere | the class `Text` in the aliased library |
 | `m/Text.rich` | its named constructor |
 | `m.Colors/red` | static member `red` of `Colors` |
 | `pi` (`:refer`red) | top-level `pi` in `dart:math` |
@@ -160,6 +161,15 @@ it attaches to:
 so the daemon falls back to the nearest preceding sibling that names a Dart type — `.home` →
 `MaterialApp`, `.body` → `Scaffold`. Purely positional; a candidate that names nothing in Dart
 simply fails to resolve and the next one is tried.
+
+**A call head is a constructor, not a class.** Hovering `Text` in `Text('hi')` in a `.dart`
+file shows the *constructor's* doc — Dart-Code asks the analysis server for `documentation:
+"full"`, so nothing is truncated; it is simply pointing at a smaller element. `(m/Text "hi" ...)`
+is the same invocation, so a symbol heading a call resolves to the unnamed constructor too.
+For `Text` that is 375 characters against the class's 4228. A symbol that is *not* a call head
+— `m/Center` standing alone in an `f/run` body — stays the class, which again is what `.dart`
+gives for a bare type reference. Where the constructor carries no doc of its own, the class is
+still the better answer and is kept.
 
 **Unbalanced buffers.** A buffer being typed into is unbalanced most of the time and rewrite-clj
 refuses it, so on a parse failure the daemon appends the missing delimiters and reparses. Only

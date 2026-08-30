@@ -46,7 +46,8 @@
      "    (math/max 1 2)"                                        ; 13
      "    pi"                                                    ; 14
      "    (.substring s 1)"                                      ; 15
-     "    m/NoSuchWidgetHere))"]))                               ; 16
+     "    m/Center"                                              ; 16
+     "    m/NoSuchWidgetHere))"]))                               ; 17
 
 ;; ------------------------------------------------------------------ harness
 
@@ -94,15 +95,23 @@
 (println "\nping")
 (check (:ok (rpc "ping" nil)) "daemon answers")
 
-(println "\nm/MaterialApp  -- a class through a string alias")
+(println "\nm/MaterialApp  -- heading a call, so the constructor")
 (let [r (at 7 8)]
-  (check (= "class" (:kind r)) "kind" r)
-  (check (str/starts-with? (str (:doc r)) "An application that uses Material Design.")
-         "class doc" (some-> (:doc r) (subs 0 (min 50 (count (:doc r))))))
-  (check (= "class MaterialApp extends StatefulWidget" (:signature r)) "signature" r)
-  (check (located? r "MaterialApp") "jumps to `MaterialApp` in app.dart" (:defRange r))
+  (check (= "constructor" (:kind r)) "kind -- what `MaterialApp(...)` hovers to in Dart" r)
+  (check (str/starts-with? (str (:doc r)) "Creates a MaterialApp.")
+         "the constructor's doc, not the class's" (some-> (:doc r) (subs 0 (min 50 (count (:doc r))))))
+  (check (str/starts-with? (str (:signature r)) "const MaterialApp({")
+         "signature" (some-> (:signature r) (subs 0 (min 40 (count (:signature r))))))
+  (check (= "MaterialApp" (:container r)) "container is the class" r)
+  (check (located? r "MaterialApp") "jumps to the constructor in app.dart" (:defRange r))
   (check (= {:start {:line 7 :character 5} :end {:line 7 :character 18}} (:originRange r))
          "originRange covers the symbol in the .cljd buffer" (:originRange r)))
+
+(println "\nm/Center  -- a bare reference, so still the class")
+(let [r (at 16 7)]
+  (check (= "class" (:kind r)) "kind -- not a call, so the type itself" r)
+  (check (= "class Center extends Align" (:signature r)) "signature" r)
+  (check (located? r "Center") "jumps to `Center` in basic.dart" (:defRange r)))
 
 (println "\n.title  -- named parameter of the enclosing constructor call")
 (let [r (at 8 8)]
@@ -144,7 +153,7 @@
 
 (println "\nwhat route B gives up on")
 (check (nil? (at 15 6)) "(.substring s 1) -- needs type inference, returns null")
-(check (nil? (at 16 6)) "m/NoSuchWidgetHere -- unknown element, returns null")
+(check (nil? (at 17 6)) "m/NoSuchWidgetHere -- unknown element, returns null")
 (check (nil? (at 5 4)) "`main` -- a plain Clojure symbol, returns null")
 (check (nil? (at 4 0)) "an empty line, returns null")
 

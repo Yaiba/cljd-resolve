@@ -158,6 +158,13 @@
   [zloc]
   (rest (take-while some? (iterate z/left zloc))))
 
+(defn- call-head?
+  "The token is the first child of an enclosing list -- so the form is a call,
+   `(m/Text \"hi\" ...)`, and in Dart terms a constructor invocation."
+  [zloc]
+  (boolean (and (= :list (some-> (z/up zloc) z/tag))
+                (empty? (left-siblings zloc)))))
+
 (defn- candidate-of
   "The symbol a sibling contributes: a call's head, or the symbol itself."
   [zloc]
@@ -201,4 +208,5 @@
         (assoc c
                :symbol s
                :range (z/position-span zloc)
+               :head? (call-head? zloc)
                :owners (when (= :dot-name (:kind c)) (owner-candidates zloc)))))))

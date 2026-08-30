@@ -104,7 +104,13 @@
   (check (= "m/MaterialApp" (:symbol (at 9 6))) "first char of the symbol counts")
   (check (nil? (at 10 5)) "leading whitespace resolves to nothing")
   (check (nil? (at 10 14)) "a string literal is not a symbol")
-  (check= "m.Colors/pink" (:symbol (at 11 45)) "dotted-alias static member"))
+  (check= "m.Colors/pink" (:symbol (at 11 45)) "dotted-alias static member")
+  ;; heading a call means the symbol is a constructor invocation, so the
+  ;; resolver hovers the constructor rather than the whole class
+  (check (:head? (at 9 8)) "m/MaterialApp heads a call")
+  (check (:head? (at 18 8)) "m/Text.rich heads a call")
+  (check (not (:head? (at 11 45))) "m.Colors/pink is an argument, not a head")
+  (check (not (:head? (at 12 5))) ".home is not a head"))
 
 ;; ---------------------------------------------------------- owner-candidates
 

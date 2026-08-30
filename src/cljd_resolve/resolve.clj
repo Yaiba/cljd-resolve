@@ -3,7 +3,9 @@
 
    Three shapes, all syntactic:
 
-     m/Text          a type, or a top-level fn/var, in the aliased library
+     m/Text          a type, or a top-level fn/var, in the aliased library --
+                     but its unnamed constructor when it heads a call, which
+                     is the element a `.dart` hover on `Text('hi')` shows
      m.Colors/red    a static member of a type in the aliased library
      .style          a named parameter of the enclosing constructor call --
                      or, failing that, a member of that class
@@ -66,12 +68,23 @@
     (when-let [e (an/element a lib type)]
       [e lib])))
 
-(defn- resolve-qualified [a {:keys [aliases]} {:keys [alias type member]}]
+(defn- resolve-qualified [a {:keys [aliases]} {:keys [alias type member head?]}]
   (when-let [[e lib] (lookup-type a aliases alias type)]
-    (if member
+    (cond
+      member
       (when (class-map? e)
         (when-let [[m via] (find-in-class e type member)]
           {:element m :name member :lib lib :container (or via type)}))
+
+      ;; `(m/Text "hi" ...)` is a constructor invocation, so hover the
+      ;; constructor -- which is what a `.dart` hover on `Text('hi')` shows --
+      ;; rather than the class and its whole dartdoc (375 chars against 4228,
+      ;; for Text). Only when that constructor is itself documented; where it
+      ;; is not, the class prose is still the better answer.
+      (and head? (class-map? e) (:doc (ctor e type)))
+      {:element (ctor e type) :name type :lib lib :container type}
+
+      :else
       {:element e :name type :lib lib :container lib})))
 
 (defn- resolve-bare [a {:keys [refers]} {:keys [name]}]
