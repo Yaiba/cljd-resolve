@@ -298,19 +298,20 @@ unchanged everywhere.
 ## Tests
 
 ```bash
-bb test                      # everything that does not need a Flutter SDK
-bb test:parse                # syntax only -- no Dart, instant
-bb test:registry             # the analyzer registry's supervision rules, no Dart
-bb test:extension            # the extension, no VSCode and no Dart, instant
-bb test:analyzer [project]   # the patched helper (step 1)
-bb test:resolve  [project]   # the daemon end to end (step 2)
-bb test:flutter  [project]   # the last two again, against a real Flutter SDK
+bb test                        # everything that does not need a Flutter SDK
+bb test:parse                  # syntax only -- no Dart, instant
+bb test:registry               # the analyzer registry's supervision rules, no Dart
+bb test:extension              # the extension, no VSCode and no Dart, instant
+bb test:analyzer    [project]  # the patched helper (step 1)
+bb test:resolve     [project]  # the daemon end to end (step 2)
+bb test:flutter     [project]  # the last two again, against a real Flutter SDK
+bb test:material-ui [project]  # and again, against the standalone material_ui
 ```
 
 Every suite prints one line per check and exits non-zero on failure.
 
 The two integration suites run against a **target**: a Dart project, plus the names of the
-declarations to probe in it (`test/cljd_resolve/test_target.clj`). There are two.
+declarations to probe in it (`test/cljd_resolve/test_target.clj`). There are three.
 
 `fixture` is the default — `test/fixture`, a checked-in, dependency-free Dart package whose
 `lib/widgets.dart` mirrors the *shapes* the suites care about (a documented class whose
@@ -324,14 +325,23 @@ first use, so `bb test` works on a clean checkout.
 argument or in `CLJD_TEST_PROJECT`; naming one selects this target, and `CLJD_TEST_TARGET`
 overrides that either way.
 
+`material_ui` is those same assertions once more against
+`package:material_ui/material_ui.dart`, the standalone package Flutter 3.47 split Material out
+of the SDK into. Nothing in the resolver knows what a Flutter library is — an alias's URI comes
+out of the `ns` form and goes straight to the analyzer — so the two targets share one
+vocabulary and differ only in `:lib`, which is exactly the difference worth a regression test.
+It needs a project that depends on `material_ui`, so naming a project never implies it; ask for
+it with `CLJD_TEST_TARGET=material_ui`, or `bb test:material-ui`.
+
 A suite that cannot run — no `dart` on `PATH`, or no project for the flutter tier — prints
 `SKIP` and passes, so a machine without the SDK still gets the rest. `CLJD_TEST_STRICT=1`
 turns those skips into failures; CI sets it on the tiers that just installed an SDK, where a
 skip would mean a silently empty job.
 
 `.github/workflows/ci.yml` runs the three no-SDK suites and the fixture tier on every push. The
-flutter tier is weekly and on demand, against a throwaway `flutter create` app -- it is slow and
-pins us to an SDK release, and nothing in it is a regression the fixture tier would miss.
+flutter tier is weekly and on demand, against a throwaway `flutter create` app with
+`material_ui` added to it -- it runs both Material targets, is slow, and pins us to an SDK
+release, and nothing in it is a regression the fixture tier would miss.
 
 **`test/analyzer_test.clj`** — 25-odd checks against the target library. Beyond presence, every
 `:offset`/`:length` is spot-checked by seeking into the named file and confirming the characters

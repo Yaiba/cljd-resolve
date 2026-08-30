@@ -5,11 +5,17 @@
    one machine (cljd-resolve-1sf.1). They now run against a *target*: a Dart
    project plus a vocabulary of the declarations to probe in it.
 
-     fixture  test/fixture -- checked in, dependency-free, needs only a Dart
-              SDK. The default, so `bb test` works on a clean checkout.
-     flutter  a real Flutter/cljd project, named by CLJD_TEST_PROJECT or as
-              the suite's first argument. The optional tier: the same
-              assertions against package:flutter/material.dart.
+     fixture      test/fixture -- checked in, dependency-free, needs only a
+                  Dart SDK. The default, so `bb test` works on a clean
+                  checkout.
+     flutter      a real Flutter/cljd project, named by CLJD_TEST_PROJECT or
+                  as the suite's first argument. The optional tier: the same
+                  assertions against package:flutter/material.dart.
+     material_ui  the same assertions again against
+                  package:material_ui/material_ui.dart, the standalone
+                  package Flutter 3.47 split Material out into. Needs a
+                  project that depends on it, so it is never implied --
+                  ask for it with CLJD_TEST_TARGET.
 
    Selection, highest first: the suite's first CLI argument, then
    CLJD_TEST_PROJECT, then the fixture. Naming a project implies the flutter
@@ -41,6 +47,36 @@
 ;; through a dotted alias, an enum, an abstract getter. Each target names the
 ;; declarations that have those shapes in it.
 
+;; Every Material name below is shared by two libraries: Flutter 3.47 split
+;; Material out of the SDK into a standalone `material_ui` package, and the
+;; declarations came along unrenamed. Only the URI they are imported from
+;; differs, which is the whole of what the second target exercises.
+(def ^:private material
+  {:text             "Text"
+   :text-doc         "A run of text with a single style."
+   :style-param      "style"
+   :style-doc        "If non-null, the style to use"
+   :method           "build"
+   :panel            "Scaffold"
+   :body             "body"
+   :colors           "Colors"
+   :color-field      "red"
+   :color-signature  "static const MaterialColor red"
+   :enum             "MainAxisAlignment"
+   :enum-value       "center"
+   :context          "BuildContext"
+   :context-getter   "widget"
+   :app              "MaterialApp"
+   :app-doc          "Creates a MaterialApp."
+   :app-signature    "const MaterialApp({"
+   :title            "title"
+   :title-signature  "String? title"
+   :home             "home"
+   :style-class      "TextStyle"
+   :color-param      "color"
+   :plain            "Center"
+   :plain-signature  "class Center extends Align"})
+
 (def vocabularies
   {"fixture"
    {:lib              "package:cljd_resolve_fixture/widgets.dart"
@@ -69,32 +105,8 @@
     :plain            "Middle"
     :plain-signature  "class Middle extends Align"}
 
-   "flutter"
-   {:lib              "package:flutter/material.dart"
-    :text             "Text"
-    :text-doc         "A run of text with a single style."
-    :style-param      "style"
-    :style-doc        "If non-null, the style to use"
-    :method           "build"
-    :panel            "Scaffold"
-    :body             "body"
-    :colors           "Colors"
-    :color-field      "red"
-    :color-signature  "static const MaterialColor red"
-    :enum             "MainAxisAlignment"
-    :enum-value       "center"
-    :context          "BuildContext"
-    :context-getter   "widget"
-    :app              "MaterialApp"
-    :app-doc          "Creates a MaterialApp."
-    :app-signature    "const MaterialApp({"
-    :title            "title"
-    :title-signature  "String? title"
-    :home             "home"
-    :style-class      "TextStyle"
-    :color-param      "color"
-    :plain            "Center"
-    :plain-signature  "class Center extends Align"}})
+   "flutter"     (assoc material :lib "package:flutter/material.dart")
+   "material_ui" (assoc material :lib "package:material_ui/material_ui.dart")})
 
 ;; A name no target defines, so it must resolve to nil in all of them.
 (def unknown-element "NoSuchThingHere")

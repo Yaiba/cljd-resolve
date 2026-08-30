@@ -9,8 +9,9 @@
 ;;
 ;; Runs against the checked-in fixture by default (Dart SDK, nothing else).
 ;; Name a Flutter project -- an argument, or CLJD_TEST_PROJECT -- to run the
-;; same assertions against package:flutter/material.dart instead. See
-;; cljd-resolve.test-target.
+;; same assertions against package:flutter/material.dart instead, or set
+;; CLJD_TEST_TARGET=material_ui for the standalone Material of Flutter 3.47.
+;; See cljd-resolve.test-target.
 
 (require '[babashka.process :as p]
          '[cljd-resolve.test-target :as t :refer [check head prefix?]]

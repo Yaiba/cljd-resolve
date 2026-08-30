@@ -4,9 +4,11 @@
 #            analyzer registry's supervision rules, the extension client
 #   dart     the analyzer helper and the daemon end to end, against the
 #            checked-in fixture in test/fixture
-#   flutter  the same two suites against a real Flutter app, which is slow
-#            and pins us to an SDK release, so it is on demand and weekly
-#            rather than on every push
+#   flutter  the same two suites against a real Flutter app -- once against
+#            package:flutter/material.dart and once against the standalone
+#            package:material_ui/material_ui.dart that Flutter 3.47 split it
+#            into. Slow, and it pins us to an SDK release, so it is on demand
+#            and weekly rather than on every push
 #
 # CLJD_TEST_STRICT turns "no SDK, skipping" into a failure: locally a skip
 # keeps `bb test` green, but a tier that installed an SDK and then skipped
@@ -73,5 +75,10 @@ jobs:
         with:
           bb: latest
       - name: Create a throwaway Flutter project for the analyzer to resolve against
-        run: flutter create "$RUNNER_TEMP/hello"
+        run: |
+          flutter create "$RUNNER_TEMP/hello"
+          # `flutter create` still templates package:flutter/material.dart, so
+          # the standalone Material is a dependency we have to ask for.
+          cd "$RUNNER_TEMP/hello" && flutter pub add material_ui
       - run: bb test:flutter "$RUNNER_TEMP/hello"
+      - run: bb test:material-ui "$RUNNER_TEMP/hello"

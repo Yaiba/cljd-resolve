@@ -33,6 +33,15 @@
            (apply shell env "bb" "test/analyzer_test.clj" *command-line-args*)
            (apply shell env "bb" "test/resolve_test.clj" *command-line-args*))}
 
+  test:material-ui
+  {:doc "The same two suites against package:material_ui/material_ui.dart -- the
+  standalone Material that Flutter 3.47 split out of the SDK. Needs a project
+  that depends on material_ui.
+  bb test:material-ui /path/to/project   (or set CLJD_TEST_PROJECT)"
+   :task (let [env {:extra-env {"CLJD_TEST_TARGET" "material_ui"}}]
+           (apply shell env "bb" "test/analyzer_test.clj" *command-line-args*)
+           (apply shell env "bb" "test/resolve_test.clj" *command-line-args*))}
+
   test
   {:doc "Everything that runs without a Flutter SDK. Suites needing a Dart SDK
   skip when there is none -- set CLJD_TEST_STRICT=1 to make that a failure."
