@@ -10,6 +10,10 @@
   {:doc "Syntax layer only -- no Dart, no analyzer."
    :task (shell "bb" "test/parse_test.clj")}
 
+  test:extension
+  {:doc "The extension's daemon client and hover rendering (step 3). Node, no Dart."
+   :task (shell "node" "test/extension_test.js")}
+
   test:analyzer
   {:doc "The patched analyzer helper (step 1). Needs a Flutter project."
    :task (apply shell "bb" "test/analyzer_test.clj" *command-line-args*)}
@@ -20,4 +24,4 @@
 
   test
   {:doc "Everything."
-   :depends [test:parse test:analyzer test:resolve]}}}
+   :depends [test:parse test:extension test:analyzer test:resolve]}}}

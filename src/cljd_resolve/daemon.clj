@@ -23,9 +23,10 @@
                      \"end\":{\"line\":331,\"character\":27}},
        \"originRange\":{...}}}
 
-   Methods: resolve · ping · clearCache · shutdown."
+   Methods: resolve · warmUp · ping · clearCache · shutdown."
   (:require [cheshire.core :as json]
             [cljd-resolve.analyzer :as an]
+            [cljd-resolve.parse :as parse]
             [cljd-resolve.resolve :as r]
             [clojure.java.io :as io])
   (:import [java.io BufferedReader]))
@@ -101,6 +102,19 @@
           col (or col (some-> character inc))]
       (when (and file row col)
         (present (r/resolve-cursor {:file file :text text :row row :col col}))))
+
+    ;; Starting the analyzer is a `dart run` compile, and resolving the first
+    ;; library out of the Flutter SDK costs several seconds more -- both once
+    ;; per project. The extension calls this when a `.cljd` file opens, so
+    ;; that lands while the file opens rather than on the user's first hover.
+    "warmUp"
+    (let [{:strs [file text]} params]
+      (if-let [a (and file (an/for-file file))]
+        (let [nsi  (try (parse/ns-info (or text (slurp file))) (catch Exception _ nil))
+              libs (distinct (concat (vals (:aliases nsi)) (vals (:refers nsi))))]
+          (run! #(an/library? a %) libs)
+          {:ok true :libs (count libs)})
+        {:ok false}))
 
     "ping"       {:ok true}
     "clearCache" (do (an/clear-all-caches!) (reset! line-index-cache {}) {:ok true})

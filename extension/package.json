@@ -1,0 +1,69 @@
+{
+  "name": "cljd-resolve",
+  "displayName": "ClojureDart Resolve",
+  "description": "Hover docs and jump-to-definition for Flutter symbols in .cljd files.",
+  "version": "0.1.0",
+  "publisher": "cljd-resolve",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:clojure"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cljd-resolve.restart",
+        "title": "Restart Resolve Daemon",
+        "category": "ClojureDart"
+      },
+      {
+        "command": "cljd-resolve.clearCache",
+        "title": "Clear Analyzer Cache",
+        "category": "ClojureDart"
+      },
+      {
+        "command": "cljd-resolve.showLog",
+        "title": "Show Resolve Log",
+        "category": "ClojureDart"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "editor.action.revealDefinition",
+        "key": "ctrl+alt+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && resourceExtname == .cljd"
+      }
+    ],
+    "configuration": {
+      "title": "ClojureDart Resolve",
+      "properties": {
+        "cljd-resolve.daemonPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `bin/cljd-resolve`. Empty means: look next to the extension, then in the repo above it, then on `PATH`."
+        },
+        "cljd-resolve.extraPath": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "Directories prepended to `PATH` when spawning the daemon. Use this when VSCode cannot find `bb` — a GUI launch inherits a much barer `PATH` than a terminal does."
+        },
+        "cljd-resolve.requestTimeout": {
+          "type": "number",
+          "default": 20000,
+          "description": "Milliseconds to wait for one resolve before giving up."
+        },
+        "cljd-resolve.warmUp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Dart analyzer when a .cljd file opens, so the first hover does not pay its ~8s startup."
+        },
+        "cljd-resolve.trace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log every request and result to the ClojureDart Resolve output channel."
+        }
+      }
+    }
+  }
+}

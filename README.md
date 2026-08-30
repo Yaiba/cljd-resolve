@@ -9,8 +9,8 @@ for the full design; this README covers what is built.
 |---|---|---|
 | 1 | Patch `analyzer.dart` to emit docs + locations | **done** |
 | 2 | Resolve daemon | **done** |
-| 3 | VSCode extension | not started |
-| 4 | `cmd+enter` keybinding | not started |
+| 3 | VSCode extension | **done** |
+| 4 | `cmd+enter` keybinding | **done** — the extension contributes it |
 
 ## Layout
 
@@ -19,7 +19,8 @@ helper/     the patched analyzer.dart (step 1)
 vendor/     the pristine upstream analyzer.dart, for `diff`
 src/        the resolve daemon (step 2)
 bin/        cljd-resolve -- launches the daemon
-test/       three suites; `bb test` runs them all
+extension/  the VSCode extension (steps 3 and 4)
+test/       four suites; `bb test` runs them all
 ```
 
 ## Step 1 — the patched analyzer helper
@@ -126,7 +127,9 @@ the `.cljd` buffer, so the editor underlines exactly the symbol. An unresolvable
 `result: null`, never an error.
 
 `params.text` is optional and holds the buffer's **unsaved** contents; `file` is then used only
-to find the Dart project. Other methods: `ping`, `clearCache`, `shutdown`.
+to find the Dart project. Other methods: `warmUp` (starts the analyzer for `file`'s project and
+resolves the libraries its `ns` form requires, answering `{ok, libs}` when they are ready — see
+[warm-up](#warm-up)), `ping`, `clearCache`, `shutdown`.
 
 ### What resolves
 
@@ -167,20 +170,131 @@ method call on a value — needs real type inference, and returns null rather th
 
 ### Cost
 
-Analyzer startup is ~8 s (one `dart run` compile), once per project, on the first hover. Every
-`elt` answer is then cached in memory, so a repeat lookup is sub-millisecond. `clearCache` drops
-it when the project's own Dart changes.
+Startup is ~3 s (one `dart run` compile) plus ~5.5 s to resolve the first library, once per
+project — see [warm-up](#warm-up), which is what keeps that off the first hover. Resolving an
+element out of a resolved library is ~10 ms, and every `lib` and `elt` answer is then cached in
+memory, so a repeat lookup is sub-millisecond. `clearCache` drops it when the project's own Dart
+changes.
+
+## Step 3 — the VSCode extension
+
+`extension/` registers a `HoverProvider` and a `DefinitionProvider` for `.cljd` files and
+answers both from a single `resolve` call to the step-2 daemon. It knows nothing about Dart,
+rewrite-clj or the analyzer — the daemon owns all of that. Plain CommonJS with no dependencies
+and no build step: what is in the directory is what runs.
+
+```
+extension.js   activation, the two providers, commands, status bar, warm-up
+client.js      the daemon subprocess and its JSON-RPC -- no `vscode` import
+hover.js       one resolve result -> hover markdown -- no `vscode` import
+```
+
+Neither `client.js` nor `hover.js` imports `vscode`, which is what makes the interesting half
+testable from plain node.
+
+### It sits beside Calva, not on top of it
+
+The selector is `{language: 'clojure', scheme: 'file', pattern: '**/*.cljd'}` — the same
+language Calva claims. That is fine: VSCode merges hovers from every provider that answers and
+offers multiple definitions as a peek list. Calva keeps answering for everything Clojure-shaped
+and we answer for the Dart edge; neither has to displace the other.
+
+### What it does with a result
+
+`signature` becomes a ```` ```dart ```` fence, so the declaration reads the way it reads in a
+`.dart` file. `doc` is dartdoc, which is *almost* markdown — `hover.js` closes the gap:
+
+- `{@template …}`, `{@macro …}`, `{@tool …}` and friends are doc-generator markers, not prose,
+  so the markers go and the text between them stays.
+- `[TextStyle]`, `[TextStyle.color]`, `[of()]` are dartdoc cross-references; VSCode would render
+  them as broken links, so they become `` `TextStyle` ``. Real markdown links, reference links
+  and reference definitions are left alone, and so is anything inside a code fence — where the
+  brackets are Dart source.
+
+`originRange` becomes the hover's range, so the underline covers exactly `.style` and not the
+whole form. `defUri`/`defRange` become a `LocationLink`, so a peek highlights the `.cljd` symbol
+it came from as well as the Dart it lands on.
+
+### Warm-up
+
+Two costs land once per project, and both are seconds, not milliseconds: starting the analyzer
+is a `dart run` compile (~3 s), and resolving the first library out of the Flutter SDK is
+another ~5.5 s. Resolving an *element* out of an already-resolved library is ~10 ms.
+
+So opening a `.cljd` file fires `warmUp`, which starts the analyzer and then resolves every
+library the buffer's `ns` form requires. On `hello`'s `main.cljd` that is ~8 s at file-open,
+after which the first hover — on a class the analyzer has never been asked for — is ~13 ms.
+Without it that 8 s sits on the first hover instead. Set `cljd-resolve.warmUp` to false to opt
+out.
+
+### Installing it
+
+The extension needs to find `bin/cljd-resolve`, which needs `bb` on its `PATH`.
+
+```bash
+# from the repo, for a scratch window
+code --extensionDevelopmentPath="$PWD/extension" /path/to/a/cljd/project
+
+# or, to have it always on
+ln -s "$PWD/extension" ~/.vscode/extensions/cljd-resolve
+```
+
+The symlink is supported deliberately: the daemon is found by `realpath`ing the extension
+directory first, so `../bin/cljd-resolve` means this repo and not `~/.vscode/extensions`.
+
+**If hovers do nothing, it is almost always `bb`.** VSCode launched from Finder inherits a much
+barer `PATH` than your terminal does. *ClojureDart: Show Resolve Log* says so plainly; add the
+directory to `cljd-resolve.extraPath` (`/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`
+are already tried as fallbacks).
+
+### Settings and commands
+
+| setting | |
+|---|---|
+| `cljd-resolve.daemonPath` | path to `bin/cljd-resolve`; empty means next to the extension, then the repo above it, then `PATH` |
+| `cljd-resolve.extraPath` | directories prepended to `PATH` when spawning the daemon |
+| `cljd-resolve.requestTimeout` | ms to wait for one resolve (default 20000) |
+| `cljd-resolve.warmUp` | start the analyzer when a `.cljd` file opens (default true) |
+| `cljd-resolve.trace` | log every request and result |
+
+*ClojureDart: Restart Resolve Daemon* · *Clear Analyzer Cache* — after the project's own Dart
+changes · *Show Resolve Log*.
+
+A status bar item appears for `.cljd` files: spinning while the analyzer starts, and a click
+away from the log.
+
+### When the daemon is unhappy
+
+A failure is never a popup — a broken daemon means no hover, not an error on every mouse move.
+Everything goes to the log instead. A crashed daemon is respawned on the next hover; three
+failed spawns in a row and it stops trying until you restart it, so a missing `bb` cannot turn
+into a process per mouse move.
+
+## Step 4 — the keybinding
+
+The extension contributes it, so there is nothing to put in `keybindings.json`:
+
+```json
+{ "command": "editor.action.revealDefinition",
+  "key": "ctrl+alt+enter", "mac": "cmd+enter",
+  "when": "editorTextFocus && resourceExtname == .cljd" }
+```
+
+`cmd+enter` is free on macOS — Calva's eval bindings are all `ctrl+enter`-based. Elsewhere
+`ctrl+enter` is Calva's, so the default is `ctrl+alt+enter`; `alt+F12` (peek) and `F12` work
+unchanged everywhere.
 
 ## Tests
 
 ```bash
-bb test                      # all three suites
+bb test                      # all four suites
 bb test:parse                # syntax only -- no Dart, instant
+bb test:extension            # the extension, no VSCode and no Dart, instant
 bb test:analyzer [project]   # the patched helper (step 1)
 bb test:resolve  [project]   # the daemon end to end (step 2)
 ```
 
-The project defaults to `../cljd/hello`. All three print one line per check and exit non-zero on
+The project defaults to `../cljd/hello`. All four print one line per check and exit non-zero on
 failure.
 
 **`test/analyzer_test.clj`** — 30 checks against a real Flutter SDK. Beyond presence, every
@@ -190,6 +304,12 @@ there really are the element's name, and the whole `Scaffold` payload is read ba
 
 **`test/parse_test.clj`** — the alias table, symbol classification, owner candidates, unbalanced
 buffers, Dart rendering, and offset → line/column. No subprocess, so it runs in a blink.
+
+**`test/extension_test.js`** — plain node, no VSCode and no Dart. Covers the dartdoc-to-markdown
+rendering, the daemon client (concurrency, cancellation, timeouts, a daemon that will not start),
+and then loads `extension.js` against a stubbed `vscode` module (`test/vscode_stub.js`) and a
+canned daemon (`test/fake_daemon.js`) to check the providers, commands and warm-up are wired the
+way VSCode will call them.
 
 **`test/resolve_test.clj`** — drives `bin/cljd-resolve` as a subprocess over the wire protocol,
 against a buffer that is never written to disk. Every `defRange` is confirmed by reading the
