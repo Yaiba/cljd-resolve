@@ -1,0 +1,8 @@
+# Vendored from ClojureDart resources/analyzer.dart @ 01c41592
+# (see design.md §4 step 1). Patched to emit :doc / :file / :offset / :length.
+name: cljd_helper
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+dependencies:
+  analyzer: ">=6.2.0 <7.0.0"
