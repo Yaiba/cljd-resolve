@@ -45,6 +45,81 @@ String M(Map<String, dynamic> m) {
   return sb.toString();
 }
 
+/// EDN-escapes [s] and wraps it in double quotes, so `M` can write it raw.
+String S(String s) =>
+    '"' +
+    s
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\"", "\\\"")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\t", "\\t") +
+    '"';
+
+/// Strips `///` or `/** */` markers off a doc comment, leaving its markdown
+/// body. Returns null for an absent or empty comment.
+String? stripDoc(String? raw) {
+  if (raw == null) return null;
+  var lines = raw.split("\n");
+  if (lines.isNotEmpty && lines.first.trimLeft().startsWith("/**")) {
+    lines = lines.map((l) {
+      var s = l.trimLeft();
+      if (s.startsWith("/**"))
+        s = s.substring(3);
+      else if (s.startsWith("*/"))
+        s = s.substring(2);
+      else if (s.startsWith("*")) s = s.substring(1);
+      if (s.endsWith("*/")) s = s.substring(0, s.length - 2);
+      return s.startsWith(" ") ? s.substring(1) : s;
+    }).toList();
+  } else {
+    lines = lines.map((l) {
+      final s = l.trimLeft();
+      if (!s.startsWith("///")) return l;
+      final body = s.substring(3);
+      return body.startsWith(" ") ? body.substring(1) : body;
+    }).toList();
+  }
+  final doc = lines.join("\n").trim();
+  return doc.isEmpty ? null : doc;
+}
+
+/// A synthetic element carries neither doc nor position. For a field induced
+/// by `T get foo`, both live on the accessor; for the getter `dart:math`
+/// synthesises over `const pi`, both live on the variable.
+Element deSynth(Element e) {
+  if (!e.isSynthetic) return e;
+  if (e is PropertyInducingElement) return e.getter ?? e.setter ?? e;
+  if (e is PropertyAccessorElement) return e.variable;
+  return e;
+}
+
+/// Adds `:doc`, `:file`, `:offset` and `:length` for [e] to [m].
+/// [docFrom] overrides where the doc comment is read from (see [paramDocSource]).
+void addMeta(Map<String, dynamic> m, Element e, {Element? docFrom}) {
+  e = deSynth(e);
+  final doc = stripDoc((docFrom ?? e).documentationComment);
+  if (doc != null) m[':doc'] = S(doc);
+  final file = e.source?.fullName;
+  if (file != null) m[':file'] = S(file);
+  if (e.nameOffset >= 0) {
+    m[':offset'] = e.nameOffset;
+    m[':length'] = e.nameLength;
+  }
+}
+
+/// `Text(style: ...)` documents `style` on the field the `this.style` parameter
+/// forwards to; `super.style` forwards one constructor further up.
+Element paramDocSource(ParameterElement p, [int depth = 0]) {
+  if (p.documentationComment != null || depth > 4) return p;
+  if (p is FieldFormalParameterElement) return p.field ?? p;
+  if (p is SuperFormalParameterElement) {
+    final s = p.superConstructorParameter;
+    if (s != null) return paramDocSource(s, depth + 1);
+  }
+  return p;
+}
+
 Map<String, dynamic> emitType(LibraryElement rootLib, DartType t) {
   final lib = t.element?.library?.identifier;
 
@@ -172,13 +247,15 @@ Map<String, dynamic> emitTypeArgument(
 
 Map<String, dynamic> emitParameter(LibraryElement rootLib, ParameterElement p) {
   final name = p.displayName;
-  return {
+  final res = {
     ":name": name.isEmpty ? null : name,
     ":kind": p.isNamed ? ':named' : ':positional',
     ':type': emitType(rootLib, p.type),
     ':optional': p.isOptional
     //':required': p.isRequired
   };
+  addMeta(res, p, docFrom: paramDocSource(p));
+  return res;
 }
 
 class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
@@ -206,13 +283,13 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
       ':mixins': e.mixins.map(((e) => (emitType(rootLib, e)))),
       ':interfaces': e.interfaces.map(((e) => (emitType(rootLib, e)))),
     };
+    addMeta(classData, e);
     if (e is MixinElement)
       classData[':on'] =
           e.superclassConstraints.map(((e) => (emitType(rootLib, e))));
     for (final m in e.methods.where(isPublic)) {
       final name = m.displayName;
-      classData[
-          "\"${name == '-' && m.parameters.isEmpty ? 'unary-' : name}\""] = {
+      final methodData = {
         ':kind': ':method',
         ':operator': m.isOperator,
         ':static': m.isStatic,
@@ -221,10 +298,12 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
         ':type-parameters':
             m.typeParameters.map((e) => emitTypeParameter(rootLib, e))
       };
+      addMeta(methodData, m);
+      classData["\"${name == '-' && m.parameters.isEmpty ? 'unary-' : name}\""] =
+          methodData;
     }
     for (final c in e.constructors.where(isPublic)) {
-      classData[
-          "\"${interfaceTypeAliasDisplayName != null ? c.displayName.replaceFirst(RegExp(e.displayName), interfaceTypeAliasDisplayName) : c.displayName}\""] = {
+      final ctorData = {
         ':kind': ':constructor',
         ':named': !c.isDefaultConstructor,
         ':const': c.isConst,
@@ -233,9 +312,13 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
         ':type-parameters':
             c.typeParameters.map((e) => emitTypeParameter(rootLib, e))
       };
+      addMeta(ctorData, c);
+      classData[
+          "\"${interfaceTypeAliasDisplayName != null ? c.displayName.replaceFirst(RegExp(e.displayName), interfaceTypeAliasDisplayName) : c.displayName}\""] =
+          ctorData;
     }
     for (final f in e.fields.where(isPublic)) {
-      classData["\"${f.displayName}\""] = {
+      final fieldData = {
         ':kind': ':field',
         ':static': f.isStatic,
         ':const': f.isConst,
@@ -244,6 +327,8 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
         ':type': emitType(rootLib, f.type),
         ':setter-type': f.setter != null ? emitType(rootLib, f.setter!.parameters.first.type) : null
       };
+      addMeta(fieldData, f);
+      classData["\"${f.displayName}\""] = fieldData;
     }
     return classData;
   }
@@ -267,11 +352,11 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
       ':type-parameters':
           e.typeParameters.map((e) => emitTypeParameter(rootLib, e))
     };
+    addMeta(classData, e);
 
     for (final m in e.methods.where(isPublic)) {
       final name = m.displayName;
-      classData[
-          "\"${name == '-' && m.parameters.isEmpty ? 'unary-' : name}\""] = {
+      final methodData = {
         ':kind': ':method',
         ':operator': m.isOperator,
         ':static': m.isStatic,
@@ -280,6 +365,9 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
         ':type-parameters':
             m.typeParameters.map((e) => emitTypeParameter(rootLib, e))
       };
+      addMeta(methodData, m);
+      classData["\"${name == '-' && m.parameters.isEmpty ? 'unary-' : name}\""] =
+          methodData;
     }
     classData["\"${e.displayName}\""] = {
       ':kind': ':constructor',
@@ -295,7 +383,7 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
           e.typeParameters.map((e) => emitTypeParameter(rootLib, e))
     };
     for (final f in e.fields.where(isPublic)) {
-      classData["\"${f.displayName}\""] = {
+      final fieldData = {
         ':kind': ':field',
         ':static': f.isStatic,
         ':const': f.isConst,
@@ -303,12 +391,14 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
         ':setter': f.setter != null,
         ':type': emitType(rootLib, f.type)
       };
+      addMeta(fieldData, f);
+      classData["\"${f.displayName}\""] = fieldData;
     }
     return classData;
   }
 
   Map<String, dynamic> visitPropertyAccessorElement(PropertyAccessorElement e) {
-    return {
+    final res = {
       ':kind': ':field',
       ':canon-qname-placeholder': true,
       ':canon-lib': '"${e.library.identifier}"',
@@ -318,10 +408,12 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
       ':setter': e.variable?.setter != null,
       ':type': emitType(rootLib, e.variable!.type)
     };
+    addMeta(res, e);
+    return res;
   }
 
   Map<String, dynamic> visitTopLevelVariableElement(TopLevelVariableElement e) {
-    return {
+    final res = {
       ':kind': ':field',
       ':canon-qname-placeholder': true,
       ':canon-lib': '"${e.library.identifier}"',
@@ -331,6 +423,8 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
       ':setter': e.setter != null,
       ':type': emitType(rootLib, e.type)
     };
+    addMeta(res, e);
+    return res;
   }
 
   Map<String, dynamic> visitMixinElement(MixinElement e) {
@@ -352,7 +446,7 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
   }
 
   Map<String, dynamic> visitFunctionElement(FunctionElement e) {
-    return {
+    final res = {
       ':kind': ':function',
       ':canon-qname-placeholder': true,
       ':canon-lib': '"${e.library.identifier}"',
@@ -362,6 +456,8 @@ class TopLevelVisitor extends ThrowingElementVisitor<Map<String, dynamic>> {
       ':type-parameters':
           e.typeParameters.map((e) => emitTypeParameter(rootLib, e))
     };
+    addMeta(res, e);
+    return res;
   }
 
   // void visitExtensionElement(ExtensionElement e) {
