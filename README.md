@@ -186,6 +186,16 @@ element out of a resolved library is ~10 ms, and every `lib` and `elt` answer is
 memory, so a repeat lookup is sub-millisecond. `clearCache` drops it when the project's own Dart
 changes.
 
+### When the analyzer stops answering
+
+The daemon serves one request at a time, so a helper that is alive but never replies would wedge
+every hover until you restarted things by hand. Each request therefore runs under a deadline —
+20 s by default, `CLJD_RESOLVE_TIMEOUT_MS` to change it. On expiry that helper is retired and its
+child destroyed, which is what unwinds the blocked read; the failing request reports the timeout
+and the next one starts a fresh helper. A helper that keeps wedging is backed off exactly like
+one that will not start, so a broken `dart` costs one compile per backoff window rather than one
+per hover.
+
 ## Step 3 — the VSCode extension
 
 `extension/` registers a `HoverProvider` and a `DefinitionProvider` for `.cljd` files and
