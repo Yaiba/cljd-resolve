@@ -212,7 +212,8 @@ and we answer for the Dart edge; neither has to displace the other.
 ### What it does with a result
 
 `signature` becomes a ```` ```dart ```` fence, so the declaration reads the way it reads in a
-`.dart` file. `doc` is dartdoc, which is *almost* markdown — `hover.js` closes the gap:
+`.dart` file — past 72 characters its parameters break one per line, the way `dart format`
+breaks them, rather than running off the side of the popup. `doc` is dartdoc, which is *almost* markdown — `hover.js` closes the gap:
 
 - `{@template …}`, `{@macro …}`, `{@tool …}` and friends are doc-generator markers, not prose,
   so the markers go and the text between them stays.

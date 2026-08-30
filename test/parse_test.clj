@@ -155,6 +155,38 @@
                                    :type {:element-name "String"}}]}
                     "Text")
   "constructor signature")
+(check= (str/join "\n" ["const Text("
+                        "  String data, {"
+                        "  Key? key,"
+                        "  TextStyle? style,"
+                        "  TextHeightBehavior? textHeightBehavior,"
+                        "})"])
+  (render/signature {:kind :constructor :const true
+                     :parameters [{:name 'data :kind :positional
+                                   :type {:element-name "String"}}
+                                  {:name 'key :kind :named
+                                   :type {:element-name "Key" :nullable true}}
+                                  {:name 'style :kind :named
+                                   :type {:element-name "TextStyle" :nullable true}}
+                                  {:name 'textHeightBehavior :kind :named
+                                   :type {:element-name "TextHeightBehavior" :nullable true}}]}
+                    "Text")
+  "past 72 chars the parameters break one per line, dart-format style")
+(check= (str/join "\n" ["const MaterialApp({"
+                        "  Key? key,"
+                        "  GlobalKey<NavigatorState>? navigatorKey,"
+                        "  RouteInformationProvider? routeInformationProvider,"
+                        "})"])
+  (render/signature {:kind :constructor :const true
+                     :parameters [{:name 'key :kind :named
+                                   :type {:element-name "Key" :nullable true}}
+                                  {:name 'navigatorKey :kind :named
+                                   :type {:element-name "GlobalKey" :nullable true
+                                          :type-parameters [{:element-name "NavigatorState"}]}}
+                                  {:name 'routeInformationProvider :kind :named
+                                   :type {:element-name "RouteInformationProvider" :nullable true}}]}
+                    "MaterialApp")
+  "with no positionals the `{` rides the opening paren")
 (check= "static const MaterialColor red"
   (render/signature {:kind :field :static true :const true
                      :type {:element-name "MaterialColor"}}
