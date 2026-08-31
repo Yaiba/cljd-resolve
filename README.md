@@ -128,8 +128,9 @@ the `.cljd` buffer, so the editor underlines exactly the symbol. An unresolvable
 
 `params.text` is optional and holds the buffer's **unsaved** contents; `file` is then used only
 to find the Dart project. Other methods: `warmUp` (starts the analyzer for `file`'s project and
-resolves the libraries its `ns` form requires, answering `{ok, libs}` when they are ready — see
-[warm-up](#warm-up)), `ping`, `clearCache`, `shutdown`.
+answers `{ok, libs}` — the libraries the buffer's `ns` form requires) and `warmUpLib` (resolves
+one of them), which a client drives one at a time rather than as one batch — see
+[warm-up](#warm-up) — plus `ping`, `clearCache`, `shutdown`.
 
 ### What resolves
 
@@ -242,15 +243,29 @@ Two costs land once per project, and both are seconds, not milliseconds: startin
 is a `dart run` compile (~3 s), and resolving the first library out of the Flutter SDK is
 another ~5.5 s. Resolving an *element* out of an already-resolved library is ~10 ms.
 
-So opening a `.cljd` file fires `warmUp`, which starts the analyzer and then resolves every
-library the buffer's `ns` form requires. On `hello`'s `main.cljd` that is ~8 s at file-open,
-after which the first hover — on a class the analyzer has never been asked for — is ~13 ms.
-Without it that 8 s sits on the first hover instead. Set `cljd-resolve.warmUp` to false to opt
-out.
+So opening a `.cljd` file warms the project up — **in chunks, not in one request.** The daemon
+serves one request at a time, so a single warm-up call would put a hover typed during it behind
+the whole ~8 s. Instead `warmUp` pays only the `dart run` and answers with the libraries the
+buffer's `ns` form requires, and the extension asks for them one `warmUpLib` at a time, awaiting
+each. The daemon reads stdin line by line, so a hover sent mid warm-up is simply the next line
+it reads: it waits for one chunk — ~3 s, then ~5.5 s, then ~10 ms — rather than for the batch.
+No concurrency anywhere, on either side.
+
+On `hello`'s `main.cljd` the whole thing is ~8 s at file-open, after which the first hover — on
+a class the analyzer has never been asked for — is ~13 ms. Without it that 8 s sits on the first
+hover instead. Set `cljd-resolve.warmUp` to false to opt out; a project whose warm-up fails is
+simply warmed again the next time one of its files opens.
 
 ### Installing it
 
 The extension needs to find `bin/cljd-resolve`, which needs `bb` on its `PATH`.
+
+**It runs from this checkout; there is no `.vsix`.** The extension is four dependency-free
+files, but what it drives does not travel: `bin/cljd-resolve` is babashka reading `bb.edn` and
+`src/` at the repo root, and those run a Dart helper that only works after a `dart pub get` in
+`helper/` on the machine using it. A package could carry the JavaScript and none of the rest —
+and you would still need `bb` and a Dart SDK installed — so both supported installs point VSCode
+at `extension/` where it already sits:
 
 ```bash
 # from the repo, for a scratch window

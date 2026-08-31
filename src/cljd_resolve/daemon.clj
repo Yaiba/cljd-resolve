@@ -23,7 +23,7 @@
                      \"end\":{\"line\":331,\"character\":27}},
        \"originRange\":{...}}}
 
-   Methods: resolve · warmUp · ping · clearCache · shutdown."
+   Methods: resolve · warmUp · warmUpLib · ping · clearCache · shutdown."
   (:require [cheshire.core :as json]
             [cljd-resolve.analyzer :as an]
             [cljd-resolve.parse :as parse]
@@ -117,13 +117,25 @@
     ;; library out of the Flutter SDK costs several seconds more -- both once
     ;; per project. The extension calls this when a `.cljd` file opens, so
     ;; that lands while the file opens rather than on the user's first hover.
+    ;;
+    ;; Two methods rather than one, because `serve` answers one request at a
+    ;; time: a hover sent during a warm-up waits for whatever that request is
+    ;; still doing. So `warmUp` pays only the `dart run` and hands back the
+    ;; libraries the buffer's `ns` form needs, and the client asks for them
+    ;; one `warmUpLib` at a time -- a hover then queues behind one chunk
+    ;; instead of the whole batch, with no concurrency in here at all.
     "warmUp"
     (let [{:strs [file text]} params]
-      (if-let [a (and file (an/for-file file))]
+      (if (and file (an/for-file file))
         (let [nsi  (try (parse/ns-info (or text (slurp file))) (catch Exception _ nil))
               libs (distinct (concat (vals (:aliases nsi)) (vals (:refers nsi))))]
-          (run! #(an/library? a %) libs)
-          {:ok true :libs (count libs)})
+          {:ok true :libs (vec libs)})
+        {:ok false}))
+
+    "warmUpLib"
+    (let [{:strs [file lib]} params]
+      (if-let [a (and file lib (an/for-file file))]
+        {:ok true :lib lib :found (an/library? a lib)}
         {:ok false}))
 
     "ping"       {:ok true}

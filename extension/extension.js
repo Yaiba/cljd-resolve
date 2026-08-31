@@ -173,6 +173,15 @@ const definitionProvider = {
 // compile (~3s), and resolving the first library out of the Flutter SDK is
 // another ~5.5s. Paying both when a `.cljd` file opens hides them behind the
 // file opening rather than behind the user's first hover, which is then ~10ms.
+//
+// The whole batch is ~8s, though, and the daemon serves one request at a
+// time -- so warming it in a single request would put every hover on file
+// open behind all of it. Hence one request per chunk, each awaited here: the
+// analyzer start, then one library at a time. The daemon reads stdin line by
+// line, so a hover sent mid warm-up is simply the next line it reads, and it
+// waits for one chunk (~3s, then ~5.5s, then ~10ms) instead of the batch.
+const WARM_UP_TIMEOUT = 120000;
+
 async function warmUp(document) {
   if (!daemon || !cfg().get('warmUp')) return;
   if (!document || !document.uri.fsPath.endsWith('.cljd')) return;
@@ -180,16 +189,25 @@ async function warmUp(document) {
   const key = folder ? folder.uri.fsPath : path.dirname(document.uri.fsPath);
   if (warmed.has(key)) return;
   warmed.add(key);
+  const file = document.uri.fsPath;
+  const trace = Boolean(cfg().get('trace'));
   try {
     const t = Date.now();
     const res = await daemon.request(
       'warmUp',
-      { file: document.uri.fsPath, text: document.getText() },
-      { timeout: 120000 });
-    log(res && res.ok
-      ? `warm-up ready in ${Date.now() - t}ms, ${res.libs} librar${res.libs === 1 ? 'y' : 'ies'} (${key})`
-      : `warm-up found no Dart project for ${key}`);
-    if (!res || !res.ok) warmed.delete(key);
+      { file, text: document.getText() },
+      { timeout: WARM_UP_TIMEOUT, trace });
+    if (!res || !res.ok) {
+      warmed.delete(key);
+      log(`warm-up found no Dart project for ${key}`);
+      return;
+    }
+    const libs = res.libs || [];
+    for (const lib of libs) {
+      await daemon.request('warmUpLib', { file, lib }, { timeout: WARM_UP_TIMEOUT, trace });
+    }
+    log(`warm-up ready in ${Date.now() - t}ms, ` +
+        `${libs.length} librar${libs.length === 1 ? 'y' : 'ies'} (${key})`);
   } catch (e) {
     warmed.delete(key);
     log(`warm-up failed: ${e.message}`);

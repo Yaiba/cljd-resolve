@@ -247,9 +247,19 @@ async function main() {
     rec.listeners.activeEditor.forEach((fn) => fn({ document: stub.document('/p/other.clj', '') }));
     check(rec.status.shown === false, 'and hides for anything else');
 
+    const beforeWarm = rec.output.length;
     await rec.commands.get('cljd-resolve.clearCache')();
     check(rec.messages.some(([kind, m]) => kind === 'info' && /cache cleared/i.test(m)),
       'the clear-cache command reaches the daemon', rec.messages);
+
+    // Warming is chunked so a hover queues behind one chunk, not the batch:
+    // one request to start the analyzer, then one per library it named.
+    const rewarm = rec.output.slice(beforeWarm);
+    const asked = (method) => rewarm.filter((l) => l.includes(`"method":"${method}"`)).length;
+    checkEq(1, asked('warmUp'), 'warming starts the analyzer in a request of its own');
+    checkEq(2, asked('warmUpLib'), 'and then asks for one library per request');
+    check(rewarm.some((l) => /warm-up ready in \d+ms, 2 libraries/.test(l)),
+      'and reports the whole warm-up once the last chunk lands', rewarm);
 
     await extension.deactivate();
   }
