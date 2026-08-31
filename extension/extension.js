@@ -17,6 +17,7 @@ const vscode = require('vscode');
 
 const { Daemon, protocolComplaint } = require('./client');
 const { hoverMarkdown, summary } = require('./hover');
+const { fallbackPaths, launcherName, needsShell } = require('./platform');
 
 const SELECTOR = { language: 'clojure', scheme: 'file', pattern: '**/*.cljd' };
 
@@ -35,15 +36,15 @@ function expandHome(p) {
   return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
-// `bin/cljd-resolve`: the setting, then the repo this extension lives in,
+// The platform launcher: the setting, then the repo this extension lives in,
 // then whatever is on PATH.
 //
-// There is deliberately no `<extension>/bin/cljd-resolve` candidate. Nothing
+// There is deliberately no `<extension>/bin/<launcher>` candidate. Nothing
 // ships the daemon inside the extension and nothing can: it is babashka
 // reading `bb.edn` and `src/` from the repo root, driving a Dart helper that
 // only works after a `dart pub get` in `helper/` on the machine running it.
 // So the extension is installed *from* the repo -- README, *Installing it*.
-function daemonPath(context) {
+function daemonPath(context, platform = process.platform) {
   const configured = String(cfg().get('daemonPath') || '').trim();
   if (configured) return expandHome(configured);
 
@@ -53,22 +54,17 @@ function daemonPath(context) {
   let root = context.extensionPath;
   try { root = fs.realpathSync(root); } catch (e) { /* keep the raw path */ }
 
-  const inRepo = path.join(root, '..', 'bin', 'cljd-resolve');
+  const launcher = launcherName(platform);
+  const inRepo = path.join(root, '..', 'bin', launcher);
   if (fs.existsSync(inRepo)) return inRepo;
-  return 'cljd-resolve';
+  return launcher;
 }
 
-// VSCode launched from Finder inherits a bare PATH, which is how `bb` goes
-// missing on macOS even though it works in every terminal. User `extraPath`
-// wins; the usual install dirs are a last resort.
+// GUI launches can inherit a barer PATH than a terminal. User `extraPath`
+// wins; common Babashka install locations are a last resort.
 function daemonEnv() {
   const extra = (cfg().get('extraPath') || []).map(expandHome);
-  const fallback = process.platform === 'win32' ? [] : [
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    path.join(os.homedir(), '.local', 'bin'),
-    path.join(os.homedir(), 'bin'),
-  ];
+  const fallback = fallbackPaths();
   const current = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
   const seen = new Set(current);
   const head = extra.filter((d) => d && !seen.has(d));
@@ -160,8 +156,12 @@ function showStatus(editor) {
 }
 
 function makeDaemon(context) {
+  const command = daemonPath(context);
   return new Daemon({
-    command: daemonPath(context),
+    command,
+    // Windows batch files are scripts, not native executables. Node needs the
+    // command shell to run one; executable paths on every platform stay direct.
+    shell: needsShell(process.platform, command),
     cwd: (vscode.workspace.workspaceFolders || [])[0]?.uri.fsPath,
     env: daemonEnv(),
     timeout: Number(cfg().get('requestTimeout')) || 20000,
@@ -397,4 +397,4 @@ function deactivate() {
   return daemon ? daemon.dispose() : undefined;
 }
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, daemonPath };

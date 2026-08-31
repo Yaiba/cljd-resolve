@@ -18,7 +18,7 @@ for the full design; this README covers what is built.
 helper/     the patched analyzer.dart (step 1)
 vendor/     the pristine upstream analyzer.dart, for `diff` -- see vendor/README.md
 src/        the resolve daemon (step 2)
-bin/        cljd-resolve -- launches the daemon
+bin/        cljd-resolve / .cmd -- launch the daemon
 extension/  the VSCode extension (steps 3 and 4)
 test/       six suites plus test/fixture, the Dart project they run against
 ```
@@ -284,10 +284,11 @@ simply warmed again the next time one of its files opens.
 
 ### Installing it
 
-The extension needs to find `bin/cljd-resolve`, which needs `bb` on its `PATH`.
+The extension needs to find its platform's `bin/cljd-resolve` launcher, which needs `bb` on its
+`PATH`.
 
-**It runs from this checkout; there is no `.vsix`.** The extension is four dependency-free
-files, but what it drives does not travel: `bin/cljd-resolve` is babashka reading `bb.edn` and
+**It runs from this checkout; there is no `.vsix`.** The extension is five dependency-free
+files, but what it drives does not travel: the launcher runs babashka against `bb.edn` and
 `src/` at the repo root, and those run a Dart helper that only works after a `dart pub get` in
 `helper/` on the machine using it. A package could carry the JavaScript and none of the rest —
 and you would still need `bb` and a Dart SDK installed — so both supported installs point VSCode
@@ -302,25 +303,25 @@ ln -s "$PWD/extension" ~/.vscode/extensions/cljd-resolve
 ```
 
 The symlink is supported deliberately: the daemon is found by `realpath`ing the extension
-directory first, so `../bin/cljd-resolve` means this repo and not `~/.vscode/extensions`. That
-is the extension's whole search — the repo above it, then `PATH` — so a daemon kept anywhere
-else has to be named in `cljd-resolve.daemonPath`.
+directory first, so `../bin/cljd-resolve` (or `.cmd`) means this repo and not the extensions
+directory. That is the extension's whole search — the repo above it, then `PATH` — so a daemon
+kept anywhere else has to be named in `cljd-resolve.daemonPath`.
 
-**macOS and Linux.** `bin/cljd-resolve` is POSIX `sh`, so `extension/package.json` declares
-`"os": ["darwin", "linux"]` rather than leaving the platform to be discovered at the first
-hover. Windows needs a `.cmd` launcher beside it and a second look at the `PATH` fallbacks in
-`daemonEnv`; nothing else is known to be in the way.
+**macOS, Linux, and Windows.** The extension selects `bin/cljd-resolve` (POSIX `sh`) or
+`bin/cljd-resolve.cmd` (Windows) for the host platform. Both find `bb.edn` relative to themselves,
+so they work from any current directory. On Windows, the automatic `PATH` fallbacks cover the
+usual Scoop, Chocolatey, and WinGet locations; `cljd-resolve.extraPath` covers custom installs.
 
 **If hovers do nothing, it is almost always `bb`.** VSCode launched from Finder inherits a much
 barer `PATH` than your terminal does. *ClojureDart: Show Resolve Log* says so plainly; add the
-directory to `cljd-resolve.extraPath` (`/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`
-are already tried as fallbacks).
+directory to `cljd-resolve.extraPath` (common Homebrew, local-bin, Scoop, Chocolatey, and WinGet
+locations are already tried as platform-appropriate fallbacks).
 
 ### Settings and commands
 
 | setting | |
 |---|---|
-| `cljd-resolve.daemonPath` | path to `bin/cljd-resolve`; empty means the repo above the extension, then `PATH` |
+| `cljd-resolve.daemonPath` | path to `bin/cljd-resolve` (or `.cmd`); empty means the repo above the extension, then `PATH` |
 | `cljd-resolve.extraPath` | directories prepended to `PATH` when spawning the daemon |
 | `cljd-resolve.requestTimeout` | ms to wait for one resolve (default 20000) |
 | `cljd-resolve.warmUp` | start the analyzer when a `.cljd` file opens (default true) |

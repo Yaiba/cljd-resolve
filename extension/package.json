@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "cljd-resolve",
   "engines": { "vscode": "^1.75.0" },
-  "os": ["darwin", "linux"],
+  "os": ["darwin", "linux", "win32"],
   "categories": ["Programming Languages"],
   "private": true,
   "main": "./extension.js",
@@ -42,7 +42,7 @@
         "cljd-resolve.daemonPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to `bin/cljd-resolve`. Empty means: look in the repo above the extension directory, then on `PATH`."
+          "markdownDescription": "Path to `bin/cljd-resolve` (or `.cmd` on Windows). Empty means: look in the repo above the extension directory, then on `PATH`."
         },
         "cljd-resolve.extraPath": {
           "type": "array",

@@ -8,8 +8,10 @@
 //   node test/extension_test.js
 
 const path = require('path');
+const fs = require('fs');
 const { Daemon, PROTOCOL, protocolComplaint } = require('../extension/client');
 const { cleanDoc, footer, hoverMarkdown } = require('../extension/hover');
+const { fallbackPaths, launcherName, needsShell } = require('../extension/platform');
 const stub = require('./vscode_stub');
 
 let failures = 0;
@@ -133,6 +135,25 @@ function daemon(opts) {
   }, opts));
 }
 
+console.log('\nplatform launchers');
+{
+  checkEq('cljd-resolve', launcherName('linux'), 'POSIX uses the sh launcher');
+  checkEq('cljd-resolve.cmd', launcherName('win32'), 'Windows uses the cmd launcher');
+  check(needsShell('win32', 'cljd-resolve.cmd'), 'Windows runs the cmd launcher through its shell');
+  check(!needsShell('linux', 'cljd-resolve'), 'POSIX launches its executable directly');
+  check(fs.readFileSync(path.join(repo, 'bin', 'cljd-resolve.cmd'), 'utf8')
+    .includes('"%~dp0..\\bb.edn"'),
+  'the cmd launcher finds bb.edn relative to itself');
+
+  const fallback = fallbackPaths('win32', {
+    ProgramData: 'C:\\PD',
+    LOCALAPPDATA: 'C:\\Users\\me\\Local',
+  }, 'C:\\Users\\me');
+  check(fallback.some((p) => /scoop[\\/]shims$/i.test(p)), 'Windows tries the Scoop shims');
+  check(fallback.some((p) => /chocolatey[\\/]bin$/i.test(p)), 'Windows tries Chocolatey');
+  check(fallback.some((p) => /WinGet[\\/]Links$/i.test(p)), 'Windows tries the WinGet links');
+}
+
 async function main() {
   console.log('\nthe daemon client');
   {
@@ -227,6 +248,11 @@ async function main() {
     rec.activeTextEditor = { document: doc };
 
     const extension = require('../extension/extension');
+    rec.config.daemonPath = '';
+    checkEq(path.join(repo, 'bin', 'cljd-resolve.cmd'),
+      extension.daemonPath({ extensionPath: path.join(repo, 'extension') }, 'win32'),
+      'the Windows launcher is found beside the POSIX one');
+    rec.config.daemonPath = path.join(repo, 'test', 'fake_daemon.js');
     const subscriptions = [];
     extension.activate({ extensionPath: path.join(repo, 'extension'), subscriptions });
 

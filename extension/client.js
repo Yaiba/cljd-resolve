@@ -37,6 +37,7 @@ class Daemon {
     this.args = opts.args || [];
     this.cwd = opts.cwd;
     this.env = opts.env || process.env;
+    this.shell = Boolean(opts.shell);
     this.timeout = opts.timeout || 20000;
     this.log = opts.log || (() => {});
     this.onState = opts.onState || (() => {});
@@ -68,6 +69,7 @@ class Daemon {
     const proc = spawn(this.command, this.args, {
       cwd: this.cwd,
       env: this.env,
+      shell: this.shell,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc = proc;
