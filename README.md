@@ -10,6 +10,25 @@ compiled build.
 It sits beside Calva rather than replacing it: Calva keeps answering for everything
 Clojure-shaped, and this answers for the Dart edge.
 
+## See it in VS Code
+
+The resolver warms up in the background when you open a `.cljd` file, then surfaces Dart
+documentation and signatures directly in your ClojureDart source.
+
+**Warm-up status** — a small loading indicator confirms that the analyzer is starting.
+
+![The extension shows a Loading status while resolving ClojureDart code.](docs/cljd-loading.png)
+
+**Dart documentation on hover** — hover a named argument to see its type, documentation, and
+the Flutter declaration it belongs to.
+
+![Hovering floatingActionButton shows its Flutter documentation and declaration.](docs/cljd-argument.png)
+
+**Constructor signatures on hover** — hover a widget to inspect the resolved Dart constructor
+and its available parameters.
+
+![Hovering Scaffold shows its resolved constructor signature and parameters.](docs/cljd-constructor.png)
+
 **Status:** hover, jump-to-definition and the `cmd+enter` binding all work. There is no
 marketplace release — it runs from a checkout, so [installing](#install) means a symlink or a
 scratch window.
