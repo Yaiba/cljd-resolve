@@ -8,6 +8,11 @@
 ;; concurrency, a dead helper stopped before it is replaced, a broken helper
 ;; backed off instead of recompiled on every request, and a helper that is
 ;; alive but never answers timed out and replaced (cljd-resolve-1sf.3).
+;;
+;; Two things below are not registry logic and say so where they start: the
+;; `elt` cache's freshness rule (cljd-resolve-1sf.8), and the two places a
+;; real child is needed -- a start whose banner never comes
+;; (cljd-resolve-1sf.12) and a teardown that has to unwind a blocked read.
 
 (require '[babashka.process :as p]
          '[cljd-resolve.analyzer :as an]
@@ -295,21 +300,144 @@
   (an/for-root "/p")
   (check (= 3 (count @started)) "the registry was emptied by shutdown" @started))
 
-;; ------------------------------------------- tearing down a blocked read
+;; ------------------------------------------- a locally edited Dart source
 ;;
-;; The one part of the deadline path that is not registry logic, so the one
-;; part the stubs above cannot cover. `stop!` has to return even while a
-;; request is parked in `edn/read` on the helper's stdout -- and it only does
-;; because it destroys the child BEFORE closing that reader.
-;; `PushbackReader.read` holds the reader's own monitor and `.close` wants
-;; the same one, so closing first deadlocks the closer instead of freeing the
-;; reader, and the daemon thread that was trying to recover hangs alongside
-;; the one it was recovering. Destroying the child is what unwinds the read.
+;; The cache's freshness rule (cljd-resolve-1sf.8). The helper re-reads the
+;; project's own libraries on every `elt` and marks those answers
+;; `:local-lib`; the cache here was the only thing still handing back the old
+;; one. So a local answer is re-asked once one of its files moves, and an SDK
+;; answer -- no `:local-lib` -- is not, however much its file is touched.
 ;;
-;; Any spawnable long-lived process will do; no Dart involved.
+;; Each fake's stdout carries its answers in order, so which one comes back is
+;; how these tell a cache hit from a re-ask.
+
+(defn- canned-fake
+  "A fake with `answers` queued on its stream, one per `ask!`."
+  [root & answers]
+  (assoc (fake root)
+         :in  (java.io.StringWriter.)
+         :out (java.io.PushbackReader.
+               (java.io.StringReader. (str/join " " (map pr-str answers))))))
+
+(defn- tmp-dart
+  "A real file to hang a modification time on."
+  [at]
+  (doto (java.io.File/createTempFile "cljd-resolve" ".dart")
+    .deleteOnExit
+    (.setLastModified at)))
+
+(def ^:private t0 1000000000000)                ; any two distinct mtimes
+(def ^:private t1 1000000060000)
+
+(println "\nan edited local source is re-asked, an SDK one is not")
+(let [f     (tmp-dart t0)
+      path  (.getPath f)
+      local (fn [doc] {:local-lib true :file path :doc doc})
+      ;; the same file, minus the helper's local marker: an SDK or pub answer
+      ;; is session-cached even if something does touch what it came from
+      sdk   (fn [doc] {:file path :doc doc})
+      a     (canned-fake "/p" (local "old") (sdk "sdk") (local "new"))
+      doc   (fn [lib name] (:doc (an/element a lib name)))]
+  (check (= "old" (doc "package:p/p.dart" "Label")) "the first hover asks")
+  (check (= "old" (doc "package:p/p.dart" "Label")) "the second is a cache hit")
+  (check (= "sdk" (doc "dart:core" "String")) "and an SDK answer is cached too")
+  (.setLastModified f t1)                       ; the user saved the file
+  (check (= "new" (doc "package:p/p.dart" "Label"))
+         "the edited local source is re-asked")
+  (check (= "sdk" (doc "dart:core" "String"))
+         "while the SDK entry rides out the same edit"))
+
+;; The narrow case the issue singles out: `find-in-class` hands back the
+;; MEMBER, and a member declared in a part file carries a `:file` of its own.
+;; Stamping only the class's own file would miss an edit to the part.
+(println "\na member declared in a part file is stamped too")
+(let [main (tmp-dart t0)
+      part (tmp-dart t0)
+      cls  (fn [doc] {:local-lib true :file (.getPath main) :kind :class
+                      "build" {:kind :method :file (.getPath part) :doc doc}})
+      a    (canned-fake "/p" (cls "old") (cls "new"))
+      doc  (fn [] (get-in (an/element a "package:p/p.dart" "Panel") ["build" :doc]))]
+  (check (= "old" (doc)) "the class map comes back")
+  (.setLastModified part t1)                    ; only the part file changed
+  (check (= "new" (doc)) "editing the part file alone still invalidates it"))
+
+;; A missing file reads as mtime 0. Taken as a change it is a change that
+;; never ends -- every hover would re-ask for a file no answer can come from.
+(println "\na deleted local source is not re-asked on every hover")
+(let [f   (tmp-dart t0)
+      a   (canned-fake "/p" {:local-lib true :file (.getPath f) :doc "old"}
+                            {:local-lib true :file (.getPath f) :doc "re-asked"})
+      doc (fn [] (:doc (an/element a "package:p/p.dart" "Label")))]
+  (check (= "old" (doc)) "the answer is cached")
+  (.delete f)
+  (check (= "old" (doc)) "a gone file is not a change")
+  (check (= "old" (doc)) "and still is not on the next hover"))
+
+;; ------------------------------------------ the real process layer
+;;
+;; The last two checks are the parts of the deadline path that are NOT
+;; registry logic, so the stubs above cannot cover them: what `start!` and
+;; `stop!` do to a real child. Any spawnable long-lived process will do; no
+;; Dart involved.
 
 (def have-sh?
   (try (zero? (:exit @(p/process ["sh" "-c" "exit 0"]))) (catch Exception _ false)))
+
+;; ---------------------------------- a helper that never announces itself
+;;
+;; The banner read (cljd-resolve-1sf.12). A child that DIES answers the
+;; banner read with EOF and was already covered; one that stays alive and
+;; simply never speaks -- a wedged `dart run`, a pub solve waiting on the
+;; network -- used to park `start!` forever, and since the registry entry is
+;; an unforced delay every caller for that root parked behind it. So the
+;; start has to fail on its own deadline, and once it has, the next requests
+;; have to be backed off exactly like any other bad start.
+
+(def ^:private real-process p/process)
+
+(defn- silent-child
+  "A `p/process` stand-in: whatever it is asked to run, it spawns a child
+   that holds its pipes open and never writes a banner."
+  [spawns]
+  (fn [_cmd opts]
+    (swap! spawns inc)
+    (real-process ["sh" "-c" "while true; do sleep 1; done"] opts)))
+
+(if-not have-sh?
+  (println "\nno `sh`; skipping the banner-deadline check")
+  (do
+    (println "\na helper that never announces itself fails the start on a deadline")
+    (reset-registry!)
+    (let [spawns (atom 0)]
+      (with-redefs [p/process (silent-child spawns)
+                    an/request-timeout-ms (constantly 400)]
+        (let [t0   (System/currentTimeMillis)
+              msg  (deref (future (caught #(an/for-root "/p"))) 10000 ::hung)
+              took (- (System/currentTimeMillis) t0)]
+          (check (not= ::hung msg) "the start returns instead of hanging the caller")
+          (check (and (string? msg) (str/includes? msg "did not announce itself"))
+                 "and says the banner never came" msg)
+          (check (< took 5000) "on the deadline, not on `forever`" took)
+          ;; The child is destroyed by the failing start, which is also what
+          ;; unwinds the read still parked on its stdout.
+          (check (= 1 @spawns) "one `dart run` for the first request" @spawns)
+          (let [msgs (mapv (fn [_] (caught #(an/for-root "/p"))) (range 6))]
+            (check (every? #(some-> % (str/includes? "did not announce itself")) msgs)
+                   "every later request repeats the failure" (first msgs))
+            ;; failures=1 opens a 1s window, so only the request that turned
+            ;; the first failure into a backoff pays for another spawn.
+            (check (= 2 @spawns)
+                   "7 requests cost 2 start attempts, not 7" @spawns)))))))
+
+;; ------------------------------------------- tearing down a blocked read
+;;
+;; `stop!` has to return even while a request is parked in `edn/read` on the
+;; helper's stdout -- and it only does because it destroys the child BEFORE
+;; closing that reader. `PushbackReader.read` holds the reader's own monitor
+;; and `.close` wants the same one, so closing first deadlocks the closer
+;; instead of freeing the reader, and the daemon thread that was trying to
+;; recover hangs alongside the one it was recovering. Destroying the child is
+;; what unwinds the read.
 
 (if-not have-sh?
   (println "\nno `sh`; skipping the teardown-unwinds-a-blocked-read check")

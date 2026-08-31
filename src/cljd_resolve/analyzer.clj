@@ -5,7 +5,8 @@
    of its `elt` answers -- the same trick `mk-live-analyzer-info`
    (compiler.cljc:209) plays inside a cljd build, since resolving a class out
    of the Flutter SDK costs tens of milliseconds and a hover happens on every
-   mouse move.
+   mouse move. What the SDK and pub answer stays cached for the session; what
+   the project's own Dart answers is re-asked once that file is edited.
 
    The registry supervises those children: a helper that never announces
    itself is a failed start, a helper that dies is stopped before it is
@@ -59,26 +60,59 @@
   (close-quietly in)
   (close-quietly out))
 
+(def ^:private default-request-timeout-ms 20000)
+
+(defn request-timeout-ms
+  "How long one exchange with a helper -- its startup banner or a later
+   request -- may take before the helper is treated as wedged rather than
+   slow. `CLJD_RESOLVE_TIMEOUT_MS` overrides the default.
+
+   Generous on purpose: a cold `dart run` compiles the helper first, and
+   resolving the first element out of a large SDK library really does cost
+   seconds. What this has to beat is `forever`."
+  []
+  (let [v (some-> (System/getenv "CLJD_RESOLVE_TIMEOUT_MS") parse-long)]
+    (if (and v (pos? v)) v default-request-timeout-ms)))
+
 (defn start!
-  "Spawns an analyzer for `root` and reads its startup banner.
+  "Spawns an analyzer for `root` and reads its startup banner, under a
+   deadline.
 
    Throws when the helper does not come up. A child that died during
    `dart run` -- no `dart` on PATH, a helper that will not compile, a root
    with no package config -- answers the banner read with EOF, and a record
-   built on that is a broken analyzer that nothing downstream would notice."
+   built on that is a broken analyzer that nothing downstream would notice.
+
+   A child that neither dies nor answers -- a wedged `dart run`, a pub solve
+   waiting on the network -- would instead block here forever, and that is
+   worse than a dead one: the daemon serves a request at a time, and the
+   registry entry is an unforced delay, so every caller for this root parks
+   behind the same read. A blocking stream read cannot be interrupted, so it
+   runs on its own thread and the expiry path destroys the child, which is
+   what unwinds it. Failing the start is also what puts a helper that will
+   not come up into the registry's backoff, exactly like one that dies."
   [root]
   (let [proc (p/process ["dart" "run" (helper-path) root]
                         {:in :stream :out :stream :err :inherit})
         out  (java.io.PushbackReader. (io/reader (:out proc)))
         in   (io/writer (:in proc))
         fail (fn [msg cause]
-               (kill! proc in out)
+               (kill! proc in out)      ; also unwinds a banner read still parked
                (throw (ex-info msg {:root root :helper (helper-path)} cause)))
-        banner (try (edn/read {:eof nil} out)
+        ms   (request-timeout-ms)
+        pending (future (edn/read {:eof nil} out))
+        banner (try (deref pending ms ::timeout)
                     (catch Exception e
                       (fail (str "the analyzer for " root
                                  " wrote an unreadable startup banner")
-                            e)))]
+                            ;; the read ran on another thread, so what comes
+                            ;; back here is an ExecutionException around it
+                            (or (ex-cause e) e))))]
+    (when (identical? banner ::timeout)
+      (fail (str "the analyzer for " root " did not announce itself within "
+                 ms "ms -- it is running but not answering; check that"
+                 " `dart run " (helper-path) " " root "` comes up")
+            nil))
     (when-not (map? banner)
       (fail (str "the analyzer for " root " died before it announced itself"
                  " -- check that `dart` is on PATH and that `dart run "
@@ -105,18 +139,6 @@
 
 (defn alive? [a]
   (boolean (and a (p/alive? (:proc a)))))
-
-(def ^:private default-request-timeout-ms 20000)
-
-(defn request-timeout-ms
-  "How long one analyzer request may take before the helper is treated as
-   wedged rather than slow. `CLJD_RESOLVE_TIMEOUT_MS` overrides the default.
-
-   Generous on purpose: resolving the first element out of a large SDK
-   library really does cost seconds. What this has to beat is `forever`."
-  []
-  (let [v (some-> (System/getenv "CLJD_RESOLVE_TIMEOUT_MS") parse-long)]
-    (if (and v (pos? v)) v default-request-timeout-ms)))
 
 ;; Defined with the registry below: unwedging a helper is a registry
 ;; operation, not a process one, and the ordering is what makes it safe.
@@ -153,14 +175,76 @@
       v)))
 
 ;; -------------------------------------------------------------------- cache
+;;
+;; An answer is worth keeping for the whole session -- `package:flutter/...`
+;; and `dart:...` do not change while the editor is open, and a hover happens
+;; on every mouse move. The project's OWN Dart does change, and the helper
+;; already knows the difference: it re-reads a local library on every `elt`
+;; and stamps what it sends back `:local-lib` (helper/bin/analyzer.dart, the
+;; `reload` branch of `retrieveElement`). Only the cache here stood between an
+;; edited local `.dart` and the next hover, so a local answer is kept against
+;; the modification times of the files it was built from and re-asked once one
+;; of them moves. Everything else stays session-cached and costs nothing --
+;; no `:local-lib`, no stamps, no `stat` on the hot path.
+;;
+;; Two things this deliberately does not do:
+;;
+;;   `:local-lib` rather than "is `:file` under the project root". They are not
+;;   the same test: the helper compares against its own working directory, so
+;;   a project it was not started inside gets no reload and answers stale
+;;   whatever we do. Invalidating those entries would re-ask on every hover
+;;   and get the same answer back forever.
+;;
+;;   A cached MISS is left alone. nil carries no `:file` and no `:local-lib`,
+;;   so a symbol hovered before it was written stays a miss until
+;;   `clearCache`. The alternative is not caching misses at all, and a miss is
+;;   what all but one of `resolve-dot-name`'s owner candidates produce -- that
+;;   is the hot path, not the rare one.
 
-(defn- cached [a k f]
-  (let [cache (:cache a)]
+(defn- stamps
+  "Modification times of the local files `v` was built from, or nil when `v`
+   is not a local answer at all.
+
+   Members count, not just the element itself: a class map's members can be
+   declared in part files carrying `:file`s of their own, and `find-in-class`
+   hands back the MEMBER, not the class. Type references (`:super`, `:mixins`)
+   drop out of the `keep` -- only `addMeta` ever sets a `:file`."
+  [v]
+  (when (:local-lib v)
+    (not-empty
+     (into {}
+           (comp (filter map?) (keep :file) (distinct)
+                 (map (fn [f] [f (.lastModified (io/file f))])))
+           (cons v (vals v))))))
+
+(defn- stale?
+  "True once one of the files behind a cached answer has moved.
+
+   A file that is gone reads as 0, which would otherwise be a change that
+   never stops changing -- a re-ask on every hover for a file no answer can
+   come from -- so only a real timestamp counts as one."
+  [stamps]
+  (boolean (some (fn [[f t]]
+                   (let [now (.lastModified (io/file f))]
+                     (and (pos? now) (not= now t))))
+                 stamps)))
+
+(defn- cached
+  "`k`'s answer: asked for once, then kept until the local Dart it was built
+   from changes.
+
+   The re-ask races nothing that matters -- two hovers arriving together may
+   both ask, and one writes the other's answer over its own."
+  [a k f]
+  (let [cache (:cache a)
+        ask   (fn []
+                (let [v (f)]
+                  (swap! cache assoc k {:v v :stamps (stamps v)})
+                  v))]
     (if-some [e (find @cache k)]
-      (val e)
-      (let [v (f)]
-        (swap! cache assoc k v)
-        v))))
+      (let [{:keys [v] s :stamps} (val e)]
+        (if (stale? s) (ask) v))
+      (ask))))
 
 (defn library?
   "True when `lib` (a Dart library URI) resolves in this project."
