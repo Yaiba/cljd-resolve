@@ -4,23 +4,48 @@
    lists included, which are broken one per line the way `dart format` does."
   (:require [clojure.string :as str]))
 
-(defn type-str
-  "`TextStyle`, `List<Widget>`, `Color?`, `void`."
-  [t]
-  (when (map? t)
-    (let [nm  (or (:element-name t) (some-> (:qname t) str))
-          tps (seq (keep type-str (:type-parameters t)))]
-      (when nm
-        (str nm
-             (when tps (str "<" (str/join ", " tps) ">"))
-             (when (:nullable t) "?"))))))
-
-(defn- type-params-str [tps]
+(defn- type-params-str
+  "The `<T, S>` of a declaration -- the generic formals, which unlike type
+   arguments are bare names here."
+  [tps]
   (let [names (keep #(or (:element-name %) (some-> (:qname %) str)) tps)]
     (when (seq names) (str "<" (str/join ", " names) ">"))))
 
-(defn param-str [p]
-  (str/join " " (remove str/blank? [(type-str (:type p)) (str (:name p))])))
+(declare params-str)
+
+(defn type-str
+  "`TextStyle`, `List<Widget>`, `Color?`, `void` -- and function types, which
+   Dart spells out in full: `void Function(int)?`, `T Function<T>(T)`. The
+   analyzer hands those over as `:kind :function` maps carrying their own
+   `:return-type`, `:parameters` and `:type-parameters`; the type parameters
+   are the callback's own generic formals, so they go before the `(`, not
+   after the name as type arguments."
+  [t]
+  (when (map? t)
+    (if (and (= :function (:kind t)) (:return-type t))
+      (str (type-str (:return-type t))
+           " Function" (type-params-str (:type-parameters t))
+           "(" (params-str (:parameters t)) ")"
+           (when (:nullable t) "?"))
+      (let [nm  (or (:element-name t) (some-> (:qname t) str))
+            tps (seq (keep type-str (:type-parameters t)))]
+        (when nm
+          (str nm
+               (when tps (str "<" (str/join ", " tps) ">"))
+               (when (:nullable t) "?")))))))
+
+(defn param-str
+  "`TextStyle? style`, and `required` on the named parameters that carry it.
+   The keyword is only legal on a named parameter, and every parameter the
+   analyzer reports is `:named`, `:positional`, or -- when `resolve` hands a
+   single named parameter over on its own -- `:parameter`; so the test is
+   that it is not positional."
+  [p]
+  (str/join " " (remove str/blank?
+                        [(when (and (:required p) (not= :positional (:kind p)))
+                           "required")
+                         (type-str (:type p))
+                         (str (:name p))])))
 
 (defn params-str
   "Dart's parameter syntax: required positionals, then `[optional]`, then

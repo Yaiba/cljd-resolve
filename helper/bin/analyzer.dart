@@ -251,8 +251,8 @@ Map<String, dynamic> emitParameter(LibraryElement rootLib, ParameterElement p) {
     ":name": name.isEmpty ? null : name,
     ":kind": p.isNamed ? ':named' : ':positional',
     ':type': emitType(rootLib, p.type),
-    ':optional': p.isOptional
-    //':required': p.isRequired
+    ':optional': p.isOptional,
+    ':required': p.isRequired
   };
   addMeta(res, p, docFrom: paramDocSource(p));
   return res;

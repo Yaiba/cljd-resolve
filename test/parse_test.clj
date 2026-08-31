@@ -146,6 +146,69 @@
                       {:name 'style :kind :named :optional true
                        :type {:element-name "TextStyle" :nullable true}}])
   "Dart parameter syntax: required, [optional], {named}")
+(check= "{required Widget child, TextStyle? style}"
+  (render/params-str [{:name 'child :kind :named :required true
+                       :type {:element-name "Widget"}}
+                      {:name 'style :kind :named :optional true
+                       :type {:element-name "TextStyle" :nullable true}}])
+  "`required` on the named parameters that have it, and only those")
+(check= "String data"
+  (render/param-str {:name 'data :kind :positional :required true
+                     :type {:element-name "String"}})
+  "a required positional stays bare -- `required` is named-only in Dart")
+(check= "required Widget child"
+  (render/signature {:kind :parameter :required true
+                     :type {:element-name "Widget"}}
+                    "child")
+  "`required` survives the standalone named-parameter hover")
+
+;; function types: the analyzer sends the whole structure, and Dart spells it
+;; out -- `Function` alone would not compile, and `Function<T>` is plain wrong.
+
+(def ^:private void-t {:element-name "void"})
+(defn- fn-t [m]
+  (merge {:kind :function :element-name "Function" :qname 'dc.Function
+          :return-type void-t :parameters []}
+         m))
+
+(check= "void Function()" (render/type-str (fn-t {})) "bare function type")
+(check= "void Function()?"
+  (render/type-str (fn-t {:nullable true}))
+  "nullable function type")
+(check= "void Function(int)"
+  (render/type-str (fn-t {:parameters [{:kind :positional
+                                        :type {:element-name "int"}}]}))
+  "a function type's parameters may be unnamed")
+(check= "void Function({required BuildContext context, int index})"
+  (render/type-str
+    (fn-t {:parameters [{:name 'context :kind :named :required true
+                         :type {:element-name "BuildContext"}}
+                        {:name 'index :kind :named :optional true
+                         :type {:element-name "int"}}]}))
+  "named parameters inside a function type, `required` included")
+(check= "T Function<T>(T value)"
+  (render/type-str
+    (fn-t {:return-type {:element-name "T"}
+           :type-parameters [{:element-name "T"}]
+           :parameters [{:name 'value :kind :positional
+                         :type {:element-name "T"}}]}))
+  "a generic function type's type parameters go before the `(`, not after it")
+(check= "void Function(void Function(int i)? onTap)"
+  (render/type-str
+    (fn-t {:parameters
+           [{:name 'onTap :kind :positional
+             :type (fn-t {:nullable true
+                          :parameters [{:name 'i :kind :positional
+                                        :type {:element-name "int"}}]})}]}))
+  "nested callbacks")
+(check= "const Foo({required Widget child, void Function()? onTap})"
+  (render/signature {:kind :constructor :const true
+                     :parameters [{:name 'child :kind :named :required true
+                                   :type {:element-name "Widget"}}
+                                  {:name 'onTap :kind :named :optional true
+                                   :type (fn-t {:nullable true})}]}
+                    "Foo")
+  "a constructor with a required child and a callback")
 (check= "class Text extends StatelessWidget"
   (render/signature {:kind :class :super {:element-name "StatelessWidget"}} "Text")
   "class signature")
