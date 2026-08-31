@@ -4,7 +4,7 @@
 # runs babashka against `bb.edn` and `src/`, which in turn runs a Dart helper
 # that only works after a `dart pub get` in `helper/` on the machine using it.
 # None of that can travel inside an extension package, so the supported
-# install is a symlink into this repo -- README, *Installing it*.
+# install is a symlink into this repo -- README, *Install*.
 #
 # These two lines stay only so that an ad-hoc `vsce package` does not sweep up
 # editor droppings along with the files that are actually the extension.

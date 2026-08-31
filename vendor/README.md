@@ -7,7 +7,8 @@ what it was forked from, and so that a future upgrade is a three-way merge
 rather than an archaeology exercise.
 
 The patch is deliberately tiny. It adds `:doc`, `:file`, `:offset` and
-`:length` to the maps the helper already emits (README.md, *Step 1*), plus one
+`:length` to the maps the helper already emits (docs/architecture.md, *New keys*),
+plus one
 reload correction: local libraries are classified against the explicit Dart
 project root rather than the helper process's cwd. **Keeping it that small is
 the upgrade strategy.** Every line we add to it is a line someone has to
@@ -64,7 +65,7 @@ the stock helper in `.clojuredart/cache/<sha>/cljd_helper/bin/` only because
 the patch is additive and `mk-live-analyzer-info` (`compiler.cljc:208`) lets
 unknown scalar keys fall through. If upstream's `analyzer.dart` moves and this
 copy does not, the two diverge silently: the daemon keeps working — it only
-ever talks to *our* copy — but the drop-in claim in README.md quietly stops
+ever talks to *our* copy — but the drop-in claim in docs/architecture.md quietly stops
 being true, and the eventual merge gets harder every commit. Re-pinning is
 cheap; letting it rot is not.
 
@@ -133,7 +134,8 @@ The procedure assumes the patch is still small. If it isn't, fix that first.
    ```
 
 6. **Re-pin.** Update the `edn` block above, the header comment in
-   `helper/pubspec.yaml`, and the `@ <sha>` in README.md's *Step 1*. Run
+   `helper/pubspec.yaml`, and the `@ <sha>` in docs/architecture.md's
+   *The patched analyzer helper*. Run
    `dart pub get --directory=helper` and commit the resulting
    `helper/pubspec.lock`.
 
@@ -148,7 +150,7 @@ The procedure assumes the patch is still small. If it isn't, fix that first.
    `bb test:material-ui` are the ones that exercise real doc inheritance
    through `this.style` / `super.style`.
 
-9. **Re-check the drop-in claim** if `mk-live-analyzer-info` moved: README.md
-   asserts that a cljd build can use our helper in place of the stock one.
+9. **Re-check the drop-in claim** if `mk-live-analyzer-info` moved:
+   docs/architecture.md asserts that a cljd build can use our helper in place of the stock one.
    That claim rests on unknown keys falling through, not on the file being
    identical.

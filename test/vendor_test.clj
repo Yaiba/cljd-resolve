@@ -144,7 +144,7 @@
 (def upstream-vocab (edn-vocab upstream))
 (def patched-vocab  (edn-vocab patched))
 
-;; The four keys the patch exists to add. README.md, "New keys".
+;; The four keys the patch exists to add. docs/architecture.md, "New keys".
 (def added-keys #{":doc" ":file" ":offset" ":length"})
 
 (println "\nthe patch is additive")

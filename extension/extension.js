@@ -43,7 +43,7 @@ function expandHome(p) {
 // ships the daemon inside the extension and nothing can: it is babashka
 // reading `bb.edn` and `src/` from the repo root, driving a Dart helper that
 // only works after a `dart pub get` in `helper/` on the machine running it.
-// So the extension is installed *from* the repo -- README, *Installing it*.
+// So the extension is installed *from* the repo -- README, *Install*.
 function daemonPath(context, platform = process.platform) {
   const configured = String(cfg().get('daemonPath') || '').trim();
   if (configured) return expandHome(configured);
@@ -112,7 +112,7 @@ function setState(state) {
 // it at all.
 //
 // Skew is unlikely by construction: there is no `.vsix`, so the extension runs
-// from the checkout that holds the daemon it spawns (README, *Installing it*)
+// from the checkout that holds the daemon it spawns (README, *Install*)
 // and the two move together. What is left is a `cljd-resolve.daemonPath`
 // aimed at a second, older clone, or a symlinked install whose repo has not
 // been pulled -- neither of which announces itself.
