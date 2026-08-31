@@ -18,6 +18,11 @@
   {:doc "The extension's daemon client and hover rendering (step 3). Node, no Dart."
    :task (shell "node" "test/extension_test.js")}
 
+  test:vendor
+  {:doc "The vendored analyzer patch stays small, additive and confined to
+  doc/location emission. Two files compared -- no Dart. See vendor/README.md."
+   :task (shell "bb" "test/vendor_test.clj")}
+
   test:analyzer
   {:doc "The patched analyzer helper (step 1), against test/fixture. Needs a Dart SDK."
    :task (apply shell "bb" "test/analyzer_test.clj" *command-line-args*)}
@@ -45,4 +50,5 @@
   test
   {:doc "Everything that runs without a Flutter SDK. Suites needing a Dart SDK
   skip when there is none -- set CLJD_TEST_STRICT=1 to make that a failure."
-   :depends [test:parse test:registry test:extension test:analyzer test:resolve]}}}
+   :depends [test:parse test:registry test:vendor test:extension
+             test:analyzer test:resolve]}}}

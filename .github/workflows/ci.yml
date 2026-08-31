@@ -1,7 +1,8 @@
 # Three tiers, cheapest first (cljd-resolve-1sf.1).
 #
 #   core     the suites that need neither Dart nor Flutter -- syntax, the
-#            analyzer registry's supervision rules, the extension client
+#            analyzer registry's supervision rules, the vendored-patch shape
+#            check, the extension client
 #   dart     the analyzer helper and the daemon end to end, against the
 #            checked-in fixture in test/fixture
 #   flutter  the same two suites against a real Flutter app -- once against
@@ -42,6 +43,7 @@ jobs:
           bb: latest
       - run: bb test:parse
       - run: bb test:registry
+      - run: bb test:vendor
       - run: bb test:extension
 
   dart:

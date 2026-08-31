@@ -16,11 +16,11 @@ for the full design; this README covers what is built.
 
 ```
 helper/     the patched analyzer.dart (step 1)
-vendor/     the pristine upstream analyzer.dart, for `diff`
+vendor/     the pristine upstream analyzer.dart, for `diff` -- see vendor/README.md
 src/        the resolve daemon (step 2)
 bin/        cljd-resolve -- launches the daemon
 extension/  the VSCode extension (steps 3 and 4)
-test/       five suites plus test/fixture, the Dart project they run against
+test/       six suites plus test/fixture, the Dart project they run against
 ```
 
 ## Step 1 — the patched analyzer helper
@@ -30,6 +30,9 @@ test/       five suites plus test/fixture, the Dart project they run against
 hover and a jump are made of and which upstream drops on the floor.
 
 `vendor/analyzer.dart.upstream` is the pristine original, kept for `diff`.
+Upgrading it — the pins, what breaks when they drift, and how to merge a new upstream —
+is [vendor/README.md](vendor/README.md); `bb test:vendor` fails if the patch stops being
+small, additive and confined.
 
 ### New keys
 
@@ -327,6 +330,7 @@ bb test                        # everything that does not need a Flutter SDK
 bb test:parse                  # syntax only -- no Dart, instant
 bb test:registry               # the analyzer registry's supervision rules, no Dart
 bb test:extension              # the extension, no VSCode and no Dart, instant
+bb test:vendor                 # the vendored analyzer patch's shape, no Dart, instant
 bb test:analyzer    [project]  # the patched helper (step 1)
 bb test:resolve     [project]  # the daemon end to end (step 2)
 bb test:flutter     [project]  # the last two again, against a real Flutter SDK
@@ -363,7 +367,7 @@ A suite that cannot run — no `dart` on `PATH`, or no project for the flutter t
 turns those skips into failures; CI sets it on the tiers that just installed an SDK, where a
 skip would mean a silently empty job.
 
-`.github/workflows/ci.yml` runs the three no-SDK suites and the fixture tier on every push. The
+`.github/workflows/ci.yml` runs the four no-SDK suites and the fixture tier on every push. The
 flutter tier is weekly and on demand, against a throwaway `flutter create` app with
 `material_ui` added to it -- it runs both Material targets, is slow, and pins us to an SDK
 release, and nothing in it is a regression the fixture tier would miss.
@@ -372,6 +376,11 @@ release, and nothing in it is a regression the fixture tier would miss.
 `:offset`/`:length` is spot-checked by seeking into the named file and confirming the characters
 there really are the element's name, and the target's fattest class is read back whole through
 `clojure.edn` to prove the escaping holds.
+
+**`test/vendor_test.clj`** — the *shape* of the vendored patch rather than its behaviour: the
+pins `vendor/README.md` records are the ones `helper/pubspec.yaml` and `pubspec.lock` carry, the
+patch has not quietly grown, it drops nothing upstream emits, and it adds no EDN keys,
+declarations or imports beyond the four doc/location ones. Two files read and compared — no Dart.
 
 **`test/registry_test.clj`** — the analyzer registry with the process layer stubbed out: one
 `dart run` per root under concurrency, a dead helper stopped before it is replaced, and a broken
