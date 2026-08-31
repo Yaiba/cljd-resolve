@@ -26,6 +26,7 @@
    -- unless CLJD_TEST_STRICT is set, which turns every skip into a failure.
    CI sets it on the tiers it means to actually run."
   (:require [babashka.process :as p]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
 
@@ -141,6 +142,35 @@
       (when-not (zero? exit)
         (throw (ex-info (str "`dart pub get` failed in " dir "\n" out err) {:dir dir}))))))
 
+(defn- library?
+  "True when `lib` resolves in `project` according to the analyzer helper.
+
+   This is deliberately a one-shot helper rather than a dependency on the
+   production analyzer registry: target selection is test harness setup, and
+   each suite will start the helper it actually exercises after this probe."
+  [project lib]
+  (let [helper (under "helper" "bin" "analyzer.dart")
+        proc   (p/process ["dart" "run" helper project]
+                          {:in :stream :out :stream :err :inherit})
+        out    (java.io.PushbackReader. (io/reader (:out proc)))
+        in     (io/writer (:in proc))]
+    (try
+      ;; Consume the startup banner before asking the first question.
+      (edn/read {:eof nil} out)
+      (.write in (str "lib " lib "\n"))
+      (.flush in)
+      (true? (edn/read {:eof nil} out))
+      (finally
+        (.close in)
+        (.close out)
+        (when (p/alive? proc) (p/destroy-tree proc))))))
+
+(defn- unavailable!
+  "Prints and exits for a target that cannot run."
+  [suite why]
+  (println (if (strict?) "FAIL" "SKIP") suite "--" why)
+  (System/exit (if (strict?) 1 0)))
+
 (defn resolve-target
   "=> {:project :vocab :name}, {:skip \"why\"} for a missing SDK or project,
    or {:error \"why\"} for a target that does not exist. Never exits."
@@ -180,11 +210,14 @@
       (println "FAIL" suite "--" error)
       (System/exit 1))
     (when skip
-      (println (if (strict?) "FAIL" "SKIP") suite "--" skip)
-      (System/exit (if (strict?) 1 0)))
+      (unavailable! suite skip))
     (println suite "-- target" tname "at" project)
     (pub-get! (under "helper"))                  ; the analyzer package itself
     (when (= "fixture" tname) (pub-get! project))
+    (when-not (library? project (:lib (:vocab t)))
+      (unavailable! suite
+                    (str "the target library " (:lib (:vocab t))
+                         " does not resolve in " project)))
     t))
 
 ;; ------------------------------------------------------------------ cursors
