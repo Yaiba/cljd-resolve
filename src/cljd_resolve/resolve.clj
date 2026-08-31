@@ -13,9 +13,7 @@
    Anything needing real type inference resolves to nil rather than guessing."
   (:require [cljd-resolve.analyzer :as an]
             [cljd-resolve.parse :as parse]
-            [cljd-resolve.render :as render]
-            [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [cljd-resolve.render :as render]))
 
 (defn- located?
   "An element the analyzer could place in a file -- everything downstream of a
@@ -95,7 +93,7 @@
 (defn- resolve-dot-name
   "Tries each owner candidate in turn -- nearest first -- and takes the first
    one that both names a Dart class and has `member` in it."
-  [a {:keys [aliases] :as nsi} {:keys [member owners]}]
+  [a {:keys [aliases]} {:keys [member owners]}]
   (some (fn [cand]
           (let [{:keys [alias type] k :kind m :member} (parse/classify cand)]
             (when (and (= :qualified k) (nil? m) (get aliases alias))

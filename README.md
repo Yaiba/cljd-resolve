@@ -135,6 +135,29 @@ answers `{ok, libs}` — the libraries the buffer's `ns` form requires) and `war
 one of them), which a client drives one at a time rather than as one batch — see
 [warm-up](#warm-up) — plus `ping`, `clearCache`, `shutdown`.
 
+`ping` answers `{"ok":true,"protocol":1}`. `protocol` is the version of this wire surface, bumped
+when a change to it would be *misread* by a peer built against the previous one — a renamed result
+key, a param whose meaning moves; a method added on the end is not such a change. The extension
+asks once per daemon it starts and says so in its log if the answer is not the number it was built
+against. Deliberately a plain number and not a capability negotiation: there is one client, it
+lives in this repository, and it is installed from this checkout, so the two normally move
+together and the one bit worth having is the one that says when they did not.
+
+### Library URIs the daemon will not send
+
+An alias's library URI is a **string** in the `ns` form of a buffer nobody has saved, so it can
+hold anything — and the analyzer helper takes its commands whitespace-delimited (`line.split(" ")`)
+and asks its question by interpolating the URI straight into `import '${lib}' as libalias;`. A
+space shifts its tokens and silently asks something else; a quote or a newline closes that import
+and injects Dart.
+
+Both of those are upstream ClojureDart code, identical in `vendor/analyzer.dart.upstream` —
+patching them there would widen the vendored diff and worsen every upgrade — so the check is on
+this side of the pipe, in `analyzer.clj`. Only a well-formed `dart:` or `package:` URI is sent;
+anything else resolves to nothing, which is what an unresolvable cursor does anyway. An allow-list
+of the two schemes rather than a blocklist of the characters that hurt: they are the only things
+an alias may name that the analyzer can answer for.
+
 ### What resolves
 
 | in the buffer | resolves to |
@@ -316,6 +339,15 @@ Everything goes to the log instead. A crashed daemon is respawned on the next ho
 failed spawns in a row and it stops trying until you restart it, so a missing `bb` cannot turn
 into a process per mouse move.
 
+**Version skew.** Every daemon the extension starts is asked once, with `ping`, which protocol it
+speaks. Skew is unlikely by construction — there is no `.vsix`, so the extension runs from the
+checkout that holds the daemon and the two move together — and what is left is a
+`cljd-resolve.daemonPath` aimed at a second, older clone, or a symlinked install whose repo has
+not been pulled. Neither announces itself, so a mismatch is called out loudly and is not fatal:
+the log says what happened and what to do, the status bar shows a warning for as long as it is
+true, and hovers keep being answered. Refusing to serve would turn skew that is usually harmless
+into no hovers at all, over something the extension cannot fix for you.
+
 ## Step 4 — the keybinding
 
 The extension contributes it, so there is nothing to put in `keybindings.json`:
@@ -391,15 +423,18 @@ declarations or imports beyond the four doc/location ones. Two files read and co
 
 **`test/registry_test.clj`** — the analyzer registry with the process layer stubbed out: one
 `dart run` per root under concurrency, a dead helper stopped before it is replaced, and a broken
-helper backed off rather than recompiled on every hover. No Dart.
+helper backed off rather than recompiled on every hover. Plus which library URIs are allowed to
+reach the helper at all, proved by what does and does not get written to it. No Dart.
 
 **`test/parse_test.clj`** — the alias table, symbol classification, owner candidates, unbalanced
 buffers, Dart rendering, and offset → line/column. No subprocess, so it runs in a blink.
 
 **`test/extension_test.js`** — plain node, no VSCode and no Dart. Covers the dartdoc-to-markdown
 rendering, the daemon client (concurrency, cancellation, timeouts, a daemon that will not start),
-and then loads `extension.js` against a stubbed `vscode` module (`test/vscode_stub.js`) and a
-canned daemon (`test/fake_daemon.js`) to check the providers, commands and warm-up are wired the
+and the protocol check — including that the real `bin/cljd-resolve` answers the version this
+client was built against, which is the one place the two numbers meet. Then it loads
+`extension.js` against a stubbed `vscode` module (`test/vscode_stub.js`) and a canned daemon
+(`test/fake_daemon.js`) to check the providers, commands, warm-up and version skew are wired the
 way VSCode will call them.
 
 **`test/resolve_test.clj`** — drives `bin/cljd-resolve` as a subprocess over the wire protocol,

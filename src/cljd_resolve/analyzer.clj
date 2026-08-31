@@ -246,16 +246,55 @@
         (if (stale? s) (ask) v))
       (ask))))
 
+;; ------------------------------------------------------------- library URIs
+
+(def ^:private library-uri
+  ;; `dart:core`, `dart:ui_web`, `dart:_internal`; `package:flutter/material.dart`,
+  ;; `package:material_ui/material_ui.dart`, `package:a_b/src/x-1.dart`.
+  #"(?:dart:[A-Za-z_$][\w$]*|package:[A-Za-z_$][\w$]*(?:/[\w.+$-]+)+)")
+
+(defn library-uri?
+  "True when `lib` is a Dart library URI this project is willing to send.
+
+   The helper takes its commands whitespace-delimited (`line.split(\" \")`) and
+   asks its question by interpolating the URI into Dart source --
+   `import '${lib}' as libalias;`. Both are upstream ClojureDart code, identical
+   in `vendor/analyzer.dart.upstream`, so fixing them there would widen the
+   vendored diff and worsen every upgrade (vendor/README.md). Inherited code is
+   still this system's boundary, so the check goes on this side of the pipe.
+
+   And the input is real, not hypothetical: a library URI is a *string* in the
+   `ns` form of an unsaved buffer someone is still typing into, so it can hold
+   anything. A space shifts `tokens[1]`/`tokens[2]` and silently asks a
+   different question; a quote or a newline closes that import and injects
+   Dart of the caller's choosing.
+
+   An allow-list of the two schemes rather than a blocklist of the characters
+   that hurt: `dart:` and `package:` are the only things an alias may name that
+   the analyzer can answer for, and everything else -- `file:`, a bare path, a
+   half-typed URI -- has no answer to lose."
+  [lib]
+  (boolean (and (string? lib) (re-matches library-uri lib))))
+
 (defn library?
-  "True when `lib` (a Dart library URI) resolves in this project."
+  "True when `lib` (a Dart library URI) resolves in this project.
+
+   A URI we will not send is simply not a library here. Refusing it is not an
+   error: a buffer mid-edit produces malformed ones all the time, and route B
+   answers an unresolvable cursor with nothing rather than a popup."
   [a lib]
-  (cached a [:lib lib] #(true? (ask! a (str "lib " lib)))))
+  (boolean (and (library-uri? lib)
+                (cached a [:lib lib] #(true? (ask! a (str "lib " lib)))))))
 
 (defn element
   "The analyzer map for `name` in `lib`, or nil. For a class this is the map of
-   its members keyed by name, carrying `:doc`/`:file`/`:offset`/`:length`."
+   its members keyed by name, carrying `:doc`/`:file`/`:offset`/`:length`.
+
+   `name` needs no such guard: it comes from a symbol token, and rewrite-clj
+   will not read whitespace or a quote into one."
   [a lib name]
-  (cached a [:elt lib name] #(ask! a (str "elt " lib " " name))))
+  (when (library-uri? lib)
+    (cached a [:elt lib name] #(ask! a (str "elt " lib " " name)))))
 
 (defn clear-cache! [a] (reset! (:cache a) {}))
 

@@ -23,13 +23,33 @@
                      \"end\":{\"line\":331,\"character\":27}},
        \"originRange\":{...}}}
 
-   Methods: resolve · warmUp · warmUpLib · ping · clearCache · shutdown."
+   Methods: resolve · warmUp · warmUpLib · ping · clearCache · shutdown.
+
+   `ping` also answers `protocol`, the version of this wire surface -- see
+   `protocol-version`."
   (:require [cheshire.core :as json]
             [cljd-resolve.analyzer :as an]
             [cljd-resolve.parse :as parse]
             [cljd-resolve.resolve :as r]
             [clojure.java.io :as io])
   (:import [java.io BufferedReader]))
+
+(def protocol-version
+  "The version of the wire surface above -- method names, param names, and the
+   shape of what comes back. Bumped when a change to it would be *misread* by a
+   peer built against the previous one: a renamed result key, a param whose
+   meaning moves. A method added on the end is not such a change; a client that
+   never calls it cannot be confused by it.
+
+   Answered by `ping` and checked by the extension on every daemon it starts,
+   so a client and a daemon from different checkouts say so in the log instead
+   of quietly disagreeing about what came back.
+
+   Deliberately a plain number and not a capability negotiation. There is one
+   client, it lives in this repository, and it is installed from this checkout
+   rather than packaged -- so the two normally move together, and what is worth
+   having is the one bit that says when they did not."
+  1)
 
 ;; ------------------------------------------------------- offset -> position
 
@@ -138,7 +158,7 @@
         {:ok true :lib lib :found (an/library? a lib)}
         {:ok false}))
 
-    "ping"       {:ok true}
+    "ping"       {:ok true :protocol protocol-version}
     "clearCache" (do (an/clear-all-caches!) (reset! line-index-cache {}) {:ok true})
     "shutdown"   (do (an/shutdown-all!) {:ok true})
     (throw (ex-info (str "unknown method: " method) {:code -32601}))))

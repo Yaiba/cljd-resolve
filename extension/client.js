@@ -11,6 +11,26 @@ const { spawn } = require('child_process');
 // otherwise mean a new process on every mouse move.
 const RESTART_LIMIT = 3;
 
+// The daemon wire protocol this client was written against. Kept in step with
+// `protocol-version` in src/cljd_resolve/daemon.clj, which is where the rule
+// for bumping it is written down.
+const PROTOCOL = 1;
+
+// What is wrong with the daemon `ping` answered with, or null when nothing is.
+//
+// A daemon answering no `protocol` at all is a daemon from before the field
+// existed, which is the same skew by another name -- so it is reported rather
+// than waved through.
+function protocolComplaint(pong) {
+  const theirs = pong && pong.protocol;
+  if (theirs === PROTOCOL) return null;
+  return (
+    `the resolve daemon speaks protocol ${theirs === undefined ? 'nothing' : theirs}, ` +
+    `this extension speaks ${PROTOCOL} -- they are from different checkouts, ` +
+    'so hovers may be wrong or missing. Pull both to the same commit, or point ' +
+    '`cljd-resolve.daemonPath` at this repository.');
+}
+
 class Daemon {
   constructor(opts = {}) {
     this.command = opts.command;
@@ -204,4 +224,4 @@ class Daemon {
   }
 }
 
-module.exports = { Daemon, RESTART_LIMIT };
+module.exports = { Daemon, RESTART_LIMIT, PROTOCOL, protocolComplaint };

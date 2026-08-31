@@ -373,6 +373,54 @@
   (check (= "old" (doc)) "a gone file is not a change")
   (check (= "old" (doc)) "and still is not on the next hover"))
 
+;; ---------------------------------------- what may be sent as a library URI
+;;
+;; (cljd-resolve-1sf.10) The helper takes its commands whitespace-delimited
+;; (`line.split(" ")`) and asks its question by interpolating the URI into
+;; `import '${lib}' as libalias;`. Both are upstream ClojureDart code we
+;; deliberately do not patch -- so the check lives on this side, and these
+;; are the tests for it.
+;;
+;; The input is real: a library URI is a *string* in the ns form of an unsaved
+;; buffer, so it can hold a space, a quote or a newline. `(:in a)` is where a
+;; command would be written, so an empty one is the proof nothing was sent.
+
+(println "\na well-formed dart: or package: URI reaches the helper")
+(let [good ["dart:core" "dart:math" "dart:ui_web" "dart:_internal"
+            "package:flutter/material.dart"
+            "package:material_ui/material_ui.dart"
+            "package:cljd_resolve_fixture/widgets.dart"
+            "package:a_b/src/x-1.dart"]
+      a    (apply canned-fake "/p" (repeat (count good) true))]
+  (doseq [uri good]
+    (check (true? (an/library? a uri)) (str uri " is asked about") uri))
+  (check (= (count good) (count (re-seq #"(?m)^lib " (str (:in a)))))
+         "each one really was sent" (str (:in a))))
+
+(println "\na malformed one is refused before it is sent")
+(let [a   (canned-fake "/p")                    ; nothing queued: an ask would EOF
+      bad [["a space shifts the helper's tokens" "package:flutter/material.dart Text"]
+           ["a tab does too"                     "dart:\tcore"]
+           ["a newline ends the command early"   "dart:core\nelt dart:core String"]
+           ["a carriage return likewise"         "dart:core\rlib dart:async"]
+           ["a NUL is a control character"       "dart:co\u0000re"]
+           ["a single quote closes the import"   "package:x/y.dart' as z; import 'dart:io"]
+           ["a double quote is no better"        "package:x/\"y.dart"]
+           ["an unsupported scheme"              "file:///etc/passwd"]
+           ["a bare path"                        "/etc/passwd"]
+           ["a relative Dart path"               "lib/widgets.dart"]
+           ["a package with no path at all"      "package:flutter"]
+           ["a half-typed scheme"                "dart:"]
+           ["the wrong case"                     "Dart:core"]
+           ["leading whitespace"                 " dart:core"]
+           ["trailing whitespace"                "package:x/y.dart "]
+           ["the empty string"                   ""]
+           ["nothing at all"                     nil]]]
+  (doseq [[why uri] bad]
+    (check (false? (an/library? a uri)) (str "library? -- " why) uri)
+    (check (nil? (an/element a uri "Label")) (str "element -- " why) uri))
+  (check (= "" (str (:in a))) "and not one byte reached the helper" (str (:in a))))
+
 ;; ------------------------------------------ the real process layer
 ;;
 ;; The last two checks are the parts of the deadline path that are NOT

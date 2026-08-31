@@ -15,7 +15,7 @@ const os = require('os');
 const path = require('path');
 const vscode = require('vscode');
 
-const { Daemon } = require('./client');
+const { Daemon, protocolComplaint } = require('./client');
 const { hoverMarkdown, summary } = require('./hover');
 
 const SELECTOR = { language: 'clojure', scheme: 'file', pattern: '**/*.cljd' };
@@ -91,11 +91,66 @@ const STATUS = {
   stopped: { text: '$(circle-slash) cljd', tip: 'ClojureDart resolve daemon is not running' },
 };
 
+// Set while the daemon we are talking to speaks a different wire protocol
+// than this extension does; see checkProtocol.
+let mismatch = null;
+let lastState = 'stopped';
+
 function setState(state) {
+  lastState = state;
   if (!status) return;
-  const s = STATUS[state] || STATUS.stopped;
+  // The complaint outranks whatever the daemon is doing: a mismatch is not
+  // fixed by the next reply arriving, so it stays up until a matching daemon
+  // replaces this one.
+  const s = mismatch
+    ? { text: '$(warning) cljd', tip: mismatch }
+    : (STATUS[state] || STATUS.stopped);
   status.text = s.text;
   status.tooltip = `${s.tip}\nClick to show the log.`;
+}
+
+// Every daemon this extension starts is asked, once, whether it speaks the
+// protocol this extension was written against -- but only once something
+// actually needs it. Activation fires on any Clojure file, and pinging from
+// there would spawn a `bb` process for every project that has no `.cljd` in
+// it at all.
+//
+// Skew is unlikely by construction: there is no `.vsix`, so the extension runs
+// from the checkout that holds the daemon it spawns (README, *Installing it*)
+// and the two move together. What is left is a `cljd-resolve.daemonPath`
+// aimed at a second, older clone, or a symlinked install whose repo has not
+// been pulled -- neither of which announces itself.
+//
+// So: loud, and not fatal. Refusing to serve would turn skew that is usually
+// harmless -- the daemon merely newer, its extra keys ignored -- into no
+// hovers at all, and would do it for a mismatch this extension cannot fix. A
+// modal popup is no better: it is dismissed once and the skew stays. Instead
+// the log says exactly what happened and what to do, the status bar carries a
+// warning for as long as it is true, and resolving carries on.
+async function checkProtocol(d) {
+  let pong;
+  try {
+    pong = await d.request('ping', {});
+  } catch (e) {
+    // A daemon that will not start is already reported by the client, and it
+    // has no protocol to disagree about.
+    return;
+  }
+  if (d !== daemon) return;               // superseded by a rebuild mid-ping
+  mismatch = protocolComplaint(pong);
+  if (mismatch) log(`PROTOCOL MISMATCH: ${mismatch}`);
+  setState(lastState);
+}
+
+let checked = false;
+
+// The check, at most once per daemon. Awaited by warm-up, which is slow
+// already and where one more round trip buys ordered logging; fired and
+// forgotten by a resolve, which must not wait on it.
+function ensureChecked() {
+  if (checked || !daemon) return Promise.resolve();
+  checked = true;
+  return checkProtocol(daemon);
 }
 
 function showStatus(editor) {
@@ -134,6 +189,7 @@ const inFlight = new Map();
 function resolveOnce(key, params) {
   const shared = inFlight.get(key);
   if (shared) return shared;
+  ensureChecked();
   const trace = Boolean(cfg().get('trace'));
   const p = daemon.request('resolve', params, { trace })
     .then((hit) => {
@@ -234,8 +290,10 @@ const definitionProvider = {
 const WARM_UP_TIMEOUT = 120000;
 
 async function warmUp(document) {
-  if (!daemon || !cfg().get('warmUp')) return;
+  if (!daemon) return;
   if (!document || !document.uri.fsPath.endsWith('.cljd')) return;
+  await ensureChecked();
+  if (!cfg().get('warmUp')) return;
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
   const key = folder ? folder.uri.fsPath : path.dirname(document.uri.fsPath);
   if (warmed.has(key)) return;
@@ -269,6 +327,8 @@ async function warmUp(document) {
 // setting on the way.
 async function rebuild(context) {
   warmed = new Set();
+  mismatch = null;
+  checked = false;
   const old = daemon;
   daemon = makeDaemon(context);
   if (old) await old.dispose();
@@ -285,6 +345,7 @@ function activate(context) {
   setState('stopped');
 
   daemon = makeDaemon(context);
+  checked = false;
   log(`daemon: ${daemon.command}`);
 
   context.subscriptions.push(

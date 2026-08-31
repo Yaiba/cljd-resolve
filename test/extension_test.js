@@ -8,7 +8,7 @@
 //   node test/extension_test.js
 
 const path = require('path');
-const { Daemon } = require('../extension/client');
+const { Daemon, PROTOCOL, protocolComplaint } = require('../extension/client');
 const { cleanDoc, footer, hoverMarkdown } = require('../extension/hover');
 const stub = require('./vscode_stub');
 
@@ -103,6 +103,23 @@ console.log('\nhover markdown');
   checkEq('', hoverMarkdown(null), 'no hit, no hover');
 }
 
+console.log('\nthe protocol check');
+{
+  checkEq(null, protocolComplaint({ ok: true, protocol: PROTOCOL }),
+    'a daemon speaking our protocol has nothing wrong with it');
+
+  const older = protocolComplaint({ ok: true, protocol: PROTOCOL - 1 });
+  check(typeof older === 'string' && older.includes(String(PROTOCOL)),
+    'an older daemon is complained about, naming both versions', older);
+  check(/different checkouts/.test(older), 'and says why that happens', older);
+
+  check(protocolComplaint({ ok: true, protocol: PROTOCOL + 1 }) !== null,
+    'so is a newer one -- skew is skew in either direction');
+  check(protocolComplaint({ ok: true }) !== null,
+    'a daemon from before the field existed is the same skew by another name');
+  check(protocolComplaint(null) !== null, 'and so is no answer at all');
+}
+
 // --------------------------------------------------------------- the client
 
 const repo = path.resolve(__dirname, '..');
@@ -125,6 +142,8 @@ async function main() {
 
     const pong = await d.request('ping', {});
     check(pong && pong.ok === true, 'ping answers over the wire', pong);
+    checkEq(PROTOCOL, pong && pong.protocol,
+      'and names a protocol version -- the one this client speaks');
     check(states[0] === 'starting' && states.includes('ready'), 'it reports starting then ready', states);
 
     // Two in flight at once: the daemon answers in order, and ids keep the
@@ -298,6 +317,33 @@ async function main() {
     checkEq(2, asked('warmUpLib'), 'and then asks for one library per request');
     check(rewarm.some((l) => /warm-up ready in \d+ms, 2 libraries/.test(l)),
       'and reports the whole warm-up once the last chunk lands', rewarm);
+
+    // A daemon from another checkout: loud, and still answering. See
+    // extension.js -- there is no `.vsix`, so skew means a `daemonPath` aimed
+    // somewhere else, and refusing to serve would cost more than it saves.
+    check(!rec.output.some((l) => /PROTOCOL MISMATCH/.test(l)),
+      'a matching daemon says nothing about the protocol');
+    process.env.CLJD_FAKE_PROTOCOL = String(PROTOCOL + 1);
+    try {
+      await rec.commands.get('cljd-resolve.restart')();
+      check(rec.output.some((l) => /PROTOCOL MISMATCH/.test(l)),
+        'a mismatched one is called out in the log', rec.output.slice(-4));
+      check(/warning/.test(rec.status.text), 'and warns in the status bar', rec.status.text);
+      check(/different checkouts/.test(rec.status.tooltip),
+        'with the complaint as its tooltip', rec.status.tooltip);
+      const still = await rec.providers.hover[0].provider.provideHover(
+        doc, { line: 16, character: 8 }, stub.token());
+      check(still && still.contents, 'and hovers keep working -- it degrades, it does not refuse');
+      check(/warning/.test(rec.status.text),
+        'the warning outlives the next reply', rec.status.text);
+    } finally {
+      delete process.env.CLJD_FAKE_PROTOCOL;
+    }
+
+    // ... and a matching daemon clears it again.
+    await rec.commands.get('cljd-resolve.restart')();
+    check(!/warning/.test(rec.status.text),
+      'restarting onto a matching daemon clears the warning', rec.status.text);
 
     await extension.deactivate();
   }

@@ -106,7 +106,13 @@
 ;; -------------------------------------------------------------------- tests
 
 (println "\nping")
-(check (:ok (rpc "ping" nil)) "daemon answers")
+(let [r (rpc "ping" nil)]
+  (check (:ok r) "daemon answers")
+  ;; What a client checks itself against, so a daemon and an extension from
+  ;; different checkouts say so instead of quietly disagreeing about the
+  ;; shape of a result (cljd-resolve-1sf.10). test/extension_test.js is where
+  ;; the two numbers are actually compared.
+  (check (pos-int? (:protocol r)) "and names the wire protocol version" r))
 
 (println (str "\nm/" (:app v) "  -- heading a call, so the constructor"))
 (let [r (at-sym (str "m/" (:app v)))
@@ -180,6 +186,22 @@
        "an unknown element, returns null")
 (check (nil? (at-sym "main")) "`main` -- a plain Clojure symbol, returns null")
 (check (nil? (at (.indexOf (str/split-lines src) "") 0)) "an empty line, returns null")
+
+(println "\na library URI that would corrupt the helper's command")
+;; A URI is a *string* in the ns form of a buffer nobody has saved, so it can
+;; hold a space -- and the helper splits its commands on whitespace, so a space
+;; would shift its tokens and ask something else entirely. Refused on this side
+;; (cljd-resolve-1sf.10): the cursor resolves to nothing, and the helper is
+;; left able to answer the next question.
+(let [bad  (str/join "\n"
+             ["(ns acme.corrupt"
+              (str "  (:require [\"" (:lib v) " " (:plain v) "\" :as m]))")
+              ""
+              (str "(defn main [] m/" (:plain v) ")")])
+      {:keys [line character]} (t/locate bad (str "m/" (:plain v)))
+      r    (rpc "resolve" {:file file :text bad :line line :character (inc character)})]
+  (check (nil? r) "the cursor resolves to nothing rather than being sent" r))
+(check (some? (at-sym (str "m/" (:plain v)))) "and the helper still answers afterwards")
 
 (println "\ncaching")
 (let [t0 (System/currentTimeMillis)

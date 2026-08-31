@@ -4,8 +4,16 @@
 // cursor. Stands in for `bin/cljd-resolve` in the provider tests, so those
 // exercise the extension's VSCode-facing layer and nothing else.
 
+const { PROTOCOL } = require('../extension/client');
+
 // The libraries `warmUp` hands back for the client to warm one at a time.
 const LIBS = ['package:flutter/material.dart', 'dart:core'];
+
+// The protocol this fake claims. `CLJD_FAKE_PROTOCOL` makes it a daemon from
+// another checkout, which is what the extension's version check is for.
+const PROTO = process.env.CLJD_FAKE_PROTOCOL
+  ? Number(process.env.CLJD_FAKE_PROTOCOL)
+  : PROTOCOL;
 
 const HIT = {
   kind: 'parameter',
@@ -24,6 +32,7 @@ function answer(req) {
   switch (req.method) {
     case 'resolve': return HIT;
     case 'warmUp': return { ok: true, libs: LIBS };
+    case 'ping': return { ok: true, protocol: PROTO };
     default: return { ok: true };
   }
 }
@@ -43,4 +52,4 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-module.exports = { HIT, LIBS };
+module.exports = { HIT, LIBS, PROTO };
