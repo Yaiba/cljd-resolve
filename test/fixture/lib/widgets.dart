@@ -127,6 +127,29 @@ class Label extends Widget {
   Widget build(Host host) => this;
 }
 
+/// A button that invokes callbacks when it is used.
+class Button extends Widget {
+  /// Creates a button around a required child.
+  const Button({
+    required this.child,
+    this.onPressed,
+    this.onBuild,
+    this.compare,
+  });
+
+  /// The widget displayed inside the button.
+  final Widget child;
+
+  /// Called when the button is pressed.
+  final void Function()? onPressed;
+
+  /// Called while the button is being built.
+  final void Function({required Host context, int index})? onBuild;
+
+  /// Compares two values and returns an integer result.
+  final int Function<T>(T, T)? compare;
+}
+
 /// An immutable style describing how to format and paint text.
 class LabelStyle {
   /// Creates a text style.

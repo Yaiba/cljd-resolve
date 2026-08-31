@@ -30,26 +30,33 @@
 ;; Flutter's -- `f/run` and its `.named-arg` DSL resolve the same either way.
 (def src
   (str/join "\n"
-    ["(ns acme.scratch"
-     (str "  (:require [\"" (:lib v) "\" :as m]")
-     "            [\"dart:math\" :as math :refer [pi]]"
-     "            [cljd.flutter :as f]))"
-     ""
-     "(defn main []"
-     "  (f/run"
-     (str "    (m/" (:app v))
-     (str "      ." (:title v) " \"hi\")")
-     (str "    ." (:home v))
-     (str "    (m/" (:panel v) ")")
-     (str "    ." (:body v))
-     (str "    (m/" (:text v) " \"hi\" ." (:style-param v)
-          " (m/" (:style-class v) " ." (:color-param v)
-          " m." (:colors v) "/" (:color-field v) "))")
-     "    (math/max 1 2)"
-     "    pi"
-     "    (.substring s 1)"
-     (str "    m/" (:plain v))
-     (str "    m/" t/unknown-element "))")]))
+    (concat
+      ["(ns acme.scratch"
+       (str "  (:require [\"" (:lib v) "\" :as m]")
+       "            [\"dart:math\" :as math :refer [pi]]"
+       "            [cljd.flutter :as f]))"
+       ""
+       "(defn main []"
+       "  (f/run"
+       (str "    (m/" (:app v))
+       (str "      ." (:title v) " \"hi\")")
+       (str "    ." (:home v))
+       (str "    (m/" (:panel v) ")")
+       (str "    ." (:body v))
+       (str "    (m/" (:text v) " \"hi\" ." (:style-param v)
+            " (m/" (:style-class v) " ." (:color-param v)
+            " m." (:colors v) "/" (:color-field v) "))")
+       "    (math/max 1 2)"
+       "    pi"
+       "    (.substring s 1)"
+       (str "    m/" (:plain v))]
+      (when-let [button (:button v)]
+        [(str "    (m/" button)
+         (str "      ." (:child-param v) " (m/" (:plain v) ")")
+         (str "      ." (:callback-param v) " callback")
+         (str "      ." (:named-callback-param v) " builder")
+         (str "      ." (:generic-callback-param v) " comparator)")])
+      [(str "    m/" t/unknown-element "))")])))
 
 ;; ------------------------------------------------------------------ harness
 
@@ -133,6 +140,25 @@
   (check (= "class" (:kind r)) "kind -- not a call, so the type itself" r)
   (check (= (:plain-signature v) (:signature r)) "signature" r)
   (check (located? r (:plain v)) "jumps to the class declaration" (:defRange r)))
+
+(when-let [button (:button v)]
+  (println (str "\nm/" button "  -- required and function-typed parameters"))
+  (let [ctor (at-sym (str "m/" button))
+        child (at-sym (str "." (:child-param v)))
+        callback (at-sym (str "." (:callback-param v)))
+        named-callback (at-sym (str "." (:named-callback-param v)))
+        generic-callback (at-sym (str "." (:generic-callback-param v)))]
+    (check (str/includes? (:signature ctor) "required Widget child")
+           "constructor signature renders required" (:signature ctor))
+    (check (= "required Widget child" (:signature child))
+           "required named parameter hover" child)
+    (check (= "void Function()? onPressed" (:signature callback))
+           "void callback hover" callback)
+    (check (= "void Function({required Host context, int index})? onBuild"
+              (:signature named-callback))
+           "callback hover renders named parameters" named-callback)
+    (check (= "int Function<T>(T, T)? compare" (:signature generic-callback))
+           "generic callback hover renders type formals" generic-callback)))
 
 (println (str "\n." (:title v) "  -- named parameter of the enclosing constructor call"))
 (let [r (at-sym (str "." (:title v)))]

@@ -104,7 +104,14 @@
     :style-class      "LabelStyle"
     :color-param      "color"
     :plain            "Middle"
-    :plain-signature  "class Middle extends Align"}
+    :plain-signature  "class Middle extends Align"
+    ;; Fixture-only shapes that exercise analyzer -> render preservation of
+    ;; required named parameters and structured function types.
+    :button           "Button"
+    :child-param      "child"
+    :callback-param   "onPressed"
+    :named-callback-param "onBuild"
+    :generic-callback-param "compare"}
 
    "flutter"     (assoc material :lib "package:flutter/material.dart")
    "material_ui" (assoc material :lib "package:material_ui/material_ui.dart")})

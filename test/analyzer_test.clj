@@ -106,6 +106,34 @@
     (check (located? build) (str "method `" (:method v) "` is located"))
     (check (spot-check-offset build (:method v)) "method :offset points at its name")))
 
+(when-let [button-name (:button v)]
+  (println "\nelt" lib button-name " (required / function-typed parameters)")
+  (let [button (elt button-name)
+        ctor (get button button-name)
+        params (into {} (map (juxt (comp str :name) identity) (:parameters ctor)))
+        child (get params (:child-param v))
+        callback (get params (:callback-param v))
+        named-callback (get params (:named-callback-param v))
+        generic-callback (get params (:generic-callback-param v))
+        named-type (:type named-callback)
+        generic-type (:type generic-callback)]
+    (check (true? (:required child)) "required survives on a named constructor parameter" child)
+    (check (= :function (get-in callback [:type :kind]))
+           "a void callback remains a structured function type" callback)
+    (let [[context index] (:parameters named-type)]
+      (check (and (= [:named :named] (mapv :kind (:parameters named-type)))
+                  (true? (:required context))
+                  (true? (:optional index)))
+             "a callback preserves named, required, and optional parameter flags"
+             named-type))
+    (check (= "int" (get-in generic-type [:return-type :element-name]))
+           "a generic callback preserves its return type" generic-type)
+    (check (= ["T"] (mapv :element-name (:type-parameters generic-type)))
+           "a generic callback preserves its type formals" generic-type)
+    (check (= ["T" "T"]
+              (mapv #(get-in % [:type :element-name]) (:parameters generic-type)))
+           "a generic callback preserves its parameter types" generic-type)))
+
 (println "\nelt" lib (:colors v) " (a static member, as in m.Colors/red)")
 (let [colors (elt (:colors v))
       red (get colors (:color-field v))]
