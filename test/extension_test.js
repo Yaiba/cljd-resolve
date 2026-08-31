@@ -242,6 +242,44 @@ async function main() {
     cancelled.cancel();
     checkEq(null, await pending, 'a cancelled hover answers nothing');
 
+    // What the daemon was actually asked for, straight off the trace log.
+    rec.config.trace = true;
+    const sent = (method) => rec.output.filter((l) => l.includes(`"method":"${method}"`)).length;
+
+    // Both providers fire on the same cursor, so that is one round trip.
+    {
+      const before = sent('resolve');
+      const [h, d] = await Promise.all([
+        rec.providers.hover[0].provider.provideHover(doc, { line: 20, character: 4 }, stub.token()),
+        rec.providers.definition[0].provider.provideDefinition(doc, { line: 20, character: 4 }, stub.token()),
+      ]);
+      check(h && Array.isArray(d) && d.length === 1,
+        'a hover and a definition on one cursor both answer');
+      checkEq(1, sent('resolve') - before, 'from a single shared resolve');
+    }
+
+    // The shared request carries nobody's token, so one consumer cancelling
+    // must not take the answer away from the other.
+    {
+      const a = stub.token();
+      const b = stub.token();
+      const hoverP = rec.providers.hover[0].provider.provideHover(doc, { line: 21, character: 4 }, a);
+      const defP = rec.providers.definition[0].provider.provideDefinition(doc, { line: 21, character: 4 }, b);
+      a.cancel();
+      checkEq(null, await hoverP, 'the consumer that cancels answers nothing');
+      const links = await defP;
+      check(Array.isArray(links) && links.length === 1,
+        'and the one still waiting gets the shared value anyway', links);
+    }
+
+    // ... and the entry goes away when it settles, so the same cursor asked
+    // again later is a fresh request rather than a stale answer.
+    {
+      const before = sent('resolve');
+      await rec.providers.hover[0].provider.provideHover(doc, { line: 21, character: 4 }, stub.token());
+      checkEq(1, sent('resolve') - before, 'a settled share is dropped, not reused');
+    }
+
     check(rec.output.some((l) => /warm-up ready/.test(l)), 'the daemon is warmed on activation', rec.output);
     check(rec.status && rec.status.shown === true, 'the status bar shows for a .cljd editor');
     rec.listeners.activeEditor.forEach((fn) => fn({ document: stub.document('/p/other.clj', '') }));

@@ -2,8 +2,9 @@
 // The VSCode extension (design.md §4 step 3).
 //
 // Registers a HoverProvider and a DefinitionProvider for `.cljd` files and
-// answers both from one `resolve` call to the step-2 daemon. Nothing here
-// knows about Dart, rewrite-clj or the analyzer -- the daemon owns all of it.
+// answers both off the step-2 daemon -- sharing one `resolve` call when they
+// fire on the same cursor, which they always do. Nothing here knows about
+// Dart, rewrite-clj or the analyzer -- the daemon owns all of it.
 //
 // No conflict with Calva: VSCode merges hovers from every provider that
 // answers, and offers multiple definitions as a peek list, so Calva keeps
@@ -110,24 +111,70 @@ function makeDaemon(context) {
   });
 }
 
-// One `resolve` round trip. Failures are logged, never thrown at the editor --
-// a broken daemon should mean no hover, not a popup on every mouse move.
-async function resolveAt(document, position, token) {
-  if (!daemon) return null;
+// The hover and the definition provider fire on the same cursor, so the same
+// {file, text, line, character} would otherwise cost two full round trips --
+// two copies of the whole buffer up the pipe -- for one answer. In-flight
+// resolves are shared on that key instead.
+const inFlight = new Map();
+
+// One `resolve` round trip, shared by everyone asking for the same position.
+// Failures are logged, never thrown at the editor -- a broken daemon should
+// mean no hover, not a popup on every mouse move.
+//
+// The shared request deliberately carries NO cancellation token and is never
+// cancelled. Attaching the first caller's token would mean a cancelled hover
+// resolving the shared promise to null under a definition still waiting on
+// it, and both would lose the answer. Cancellation was only ever a
+// client-side discard -- the daemon does the work regardless -- so each
+// consumer races this promise against its own token instead.
+function resolveOnce(key, params) {
+  const shared = inFlight.get(key);
+  if (shared) return shared;
   const trace = Boolean(cfg().get('trace'));
-  try {
-    const hit = await daemon.request('resolve', {
-      file: document.uri.fsPath,
-      text: document.getText(), // the unsaved buffer, which is the whole point
-      line: position.line,
-      character: position.character,
-    }, { token, trace });
-    if (trace) log(`<-- ${summary(hit)}`);
-    return hit;
-  } catch (e) {
-    log(`resolve failed: ${e.message}`);
-    return null;
-  }
+  const p = daemon.request('resolve', params, { trace })
+    .then((hit) => {
+      if (trace) log(`<-- ${summary(hit)}`);
+      return hit;
+    })
+    .catch((e) => {
+      log(`resolve failed: ${e.message}`);
+      return null;
+    })
+    .finally(() => {
+      if (inFlight.get(key) === p) inFlight.delete(key);
+    });
+  inFlight.set(key, p);
+  return p;
+}
+
+// `promise`, unless `token` cancels first -- in which case null, for this
+// caller only. The listener is disposed either way, so a resolved request
+// leaves nothing hanging off the editor's token.
+function raceCancellation(promise, token) {
+  return new Promise((resolve) => {
+    let sub = null;
+    const done = (v) => {
+      if (sub && sub.dispose) sub.dispose();
+      resolve(v);
+    };
+    sub = token.onCancellationRequested(() => done(null));
+    promise.then(done, () => done(null));
+  });
+}
+
+function resolveAt(document, position, token) {
+  if (!daemon) return Promise.resolve(null);
+  const params = {
+    file: document.uri.fsPath,
+    text: document.getText(), // the unsaved buffer, which is the whole point
+    line: position.line,
+    character: position.character,
+  };
+  const key = JSON.stringify([params.file, params.line, params.character, params.text]);
+  const shared = resolveOnce(key, params);
+  if (!token) return shared;
+  if (token.isCancellationRequested) return Promise.resolve(null);
+  return raceCancellation(shared, token);
 }
 
 function toRange(r) {

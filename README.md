@@ -200,7 +200,7 @@ per hover.
 ## Step 3 — the VSCode extension
 
 `extension/` registers a `HoverProvider` and a `DefinitionProvider` for `.cljd` files and
-answers both from a single `resolve` call to the step-2 daemon. It knows nothing about Dart,
+answers both from one shared `resolve` call to the step-2 daemon. It knows nothing about Dart,
 rewrite-clj or the analyzer — the daemon owns all of that. Plain CommonJS with no dependencies
 and no build step: what is in the directory is what runs.
 
