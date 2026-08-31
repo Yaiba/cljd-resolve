@@ -189,11 +189,11 @@
 ;;
 ;; Two things this deliberately does not do:
 ;;
-;;   `:local-lib` rather than "is `:file` under the project root". They are not
-;;   the same test: the helper compares against its own working directory, so
-;;   a project it was not started inside gets no reload and answers stale
-;;   whatever we do. Invalidating those entries would re-ask on every hover
-;;   and get the same answer back forever.
+;;   `:local-lib` rather than independently asking whether `:file` is under the
+;;   project root. The marker means the helper took its local-library reload
+;;   branch, so it is the authoritative promise that re-asking can produce a
+;;   fresh answer. Keeping the cache tied to that promise prevents the two
+;;   layers' classifications from drifting apart.
 ;;
 ;;   A cached MISS is left alone. nil carries no `:file` and no `:local-lib`,
 ;;   so a symbol hovered before it was written stays a miss until

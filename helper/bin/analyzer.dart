@@ -542,7 +542,7 @@ Future<Map<String, dynamic>?> retrieveElement(
     var rootLib = result.element.importedLibraries.first;
     // when rootLib is a local file under .../lib/myfile.dart , reload it everytime
     if (reload &
-        isWithin(pathContext.normalize(pathContext.current),
+        isWithin(pathContext.normalize(projectDirectoryPath),
             pathContext.normalize(rootLib.librarySource.toString()))) {
       rootLib.session.analysisContext
           .changeFile(pathContext.normalize(rootLib.librarySource.toString()));

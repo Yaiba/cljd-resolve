@@ -1,5 +1,5 @@
 #!/usr/bin/env bb
-;; The vendored analyzer patch stays small, additive and confined
+;; The vendored analyzer patch stays small, additive and tightly confined
 ;; (cljd-resolve-1sf.11).
 ;;
 ;;   bb test/vendor_test.clj
@@ -15,8 +15,9 @@
 ;;   size      the patch has not quietly doubled
 ;;   additive  nothing upstream emits has been dropped
 ;;   confined  the only new EDN keys are the four doc/location ones, the only
-;;             new declarations are the five helpers that emit them, and the
-;;             patch pulls in no new imports
+;;             new declarations are the five helpers that emit them, the
+;;             patch pulls in no new imports, and local reloads use the
+;;             explicit project root rather than the helper's cwd
 ;;
 ;; No Dart, no analyzer, no subprocess: two files read and compared. Runs in
 ;; the `core` CI tier.
@@ -154,7 +155,7 @@
 
 ;; ---------------------------------------------------------------- confined
 
-(println "\nthe patch is confined to doc/location emission")
+(println "\nthe patch is confined to metadata emission and local reload classification")
 
 (check (= added-keys (set (remove upstream-vocab patched-vocab)))
        "the only new EDN keys are :doc :file :offset :length"
@@ -168,6 +169,14 @@
        "the patch pulls in no new imports"
        {:added (vec (remove (set (imports upstream)) (imports patched)))
         :dropped (vec (remove (set (imports patched)) (imports upstream)))})
+
+(check (str/includes? patched
+                      "isWithin(pathContext.normalize(projectDirectoryPath),")
+       "local reload classification uses the explicit project root")
+
+(check (not (str/includes? patched
+                           "isWithin(pathContext.normalize(pathContext.current),"))
+       "local reload classification does not depend on the helper cwd")
 
 ;; Declarations at indent 0 or 2 -- top-level functions plus the visitor's
 ;; methods. Statement keywords are dropped so a call that happens to look like

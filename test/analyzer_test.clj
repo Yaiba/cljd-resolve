@@ -28,9 +28,16 @@
 
 ;; ---------------------------------------------------------------- protocol
 
+(def helper-cwd
+  ;; Deliberately neither the project nor one of its ancestors. Local-library
+  ;; classification must follow the project argument, not the helper's cwd.
+  (.toFile (java.nio.file.Files/createTempDirectory
+             "cljd-resolve-analyzer-cwd-"
+             (make-array java.nio.file.attribute.FileAttribute 0))))
+
 (def proc
   (p/process ["dart" "run" helper project]
-             {:in :stream :out :stream :err :inherit}))
+             {:dir helper-cwd :in :stream :out :stream :err :inherit}))
 
 (def out (java.io.PushbackReader. (io/reader (:out proc))))
 (def in  (io/writer (:in proc)))
@@ -81,6 +88,9 @@
       style-field (get text (:style-param v))]
   (check (prefix? (:doc text) (:text-doc v))
          "class doc, comment markers stripped" (head (:doc text) 40))
+  (when (= "fixture" (:name target))
+    (check (true? (:local-lib text))
+           "project library is local even when the helper cwd is elsewhere"))
   (check (not (str/includes? (:doc text) "///")) "no /// left in class doc")
   (check (spot-check-offset text (:text v)) "class :offset/:length point at the class name"
          (select-keys text [:file :offset :length]))
@@ -142,4 +152,5 @@
 
 (.close in)
 @proc
+(.delete helper-cwd)
 (t/finish!)

@@ -7,13 +7,16 @@ what it was forked from, and so that a future upgrade is a three-way merge
 rather than an archaeology exercise.
 
 The patch is deliberately tiny. It adds `:doc`, `:file`, `:offset` and
-`:length` to the maps the helper already emits (README.md, *Step 1*) and does
-nothing else. **Keeping it that small is the upgrade strategy.** Every line we
-add to it is a line someone has to re-apply by hand the next time upstream
-moves, so the standing rule is: fix things on the Clojure side, not in this
-file. Two known upstream warts — the whitespace-in-the-protocol issue and the
-`import '${lib}'` interpolation at `analyzer.dart.upstream:437` — are
-deliberately *not* fixed here for exactly that reason.
+`:length` to the maps the helper already emits (README.md, *Step 1*), plus one
+reload correction: local libraries are classified against the explicit Dart
+project root rather than the helper process's cwd. **Keeping it that small is
+the upgrade strategy.** Every line we add to it is a line someone has to
+re-apply by hand the next time upstream moves, so the standing rule is: fix
+things on the Clojure side unless only the helper has the information or
+behavior needed for a correct fix. Two known upstream warts — the
+whitespace-in-the-protocol issue and the `import '${lib}'` interpolation at
+`analyzer.dart.upstream:437` — are deliberately *not* fixed here for exactly
+that reason.
 
 `bb test:vendor` enforces all of this. It is a fast, Dart-free check and runs
 as part of `bb test`.
@@ -76,19 +79,21 @@ Measured against the current tree by `bb test:vendor`:
 |---|---|
 | upstream | 500 lines |
 | patched | 596 lines |
-| changed lines (added + removed) | 122 |
-| removed lines | 13 |
+| changed lines (added + removed) | 124 |
+| removed lines | 14 |
 | new top-level declarations | `S`, `stripDoc`, `deSynth`, `addMeta`, `paramDocSource` |
 | new EDN keys | `:doc`, `:file`, `:offset`, `:length` |
 | new imports | none |
 
-The 13 removed lines are not deletions of behaviour. Twelve of them are
+Thirteen of the 14 removed lines are not deletions of behaviour. Twelve are
 `return {` / `classData[…] = {` lines rewritten to hoist a map literal into a
 local so `addMeta` has something to add to; the thirteenth is upstream's
-commented-out `//':required'`, which the signature work restored. Nothing
-upstream emits is dropped — `bb test:vendor` asserts that directly, by
-comparing the two files' EDN vocabularies rather than by trusting the line
-count.
+commented-out `//':required'`, which the signature work restored. The remaining
+replacement changes `pathContext.current` to `projectDirectoryPath` in the
+local-library reload check, so classification follows the same root the
+analysis collection uses. Nothing upstream emits is dropped — `bb test:vendor`
+asserts that directly, by comparing the two files' EDN vocabularies rather than
+by trusting the line count.
 
 ## Pulling a new upstream `analyzer.dart`
 
