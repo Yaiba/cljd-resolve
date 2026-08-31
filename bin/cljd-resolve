@@ -1,5 +1,9 @@
 #!/bin/sh
 # The resolve daemon, speaking newline-delimited JSON-RPC on stdio.
 # Safe to run from any directory -- the extension spawns this.
+#
+# POSIX sh, and it finds bb.edn (and through it src/ and helper/) relative to
+# itself: this runs from inside a checkout, on macOS or Linux. There is no
+# Windows equivalent, which is what extension/package.json's "os" declares.
 here=$(cd "$(dirname "$0")" && pwd)
 exec bb --config "$here/../bb.edn" -m cljd-resolve.daemon "$@"

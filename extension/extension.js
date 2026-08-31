@@ -35,22 +35,26 @@ function expandHome(p) {
   return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p;
 }
 
-// `bin/cljd-resolve`: the setting, then the two layouts the extension can be
-// installed in, then whatever is on PATH.
+// `bin/cljd-resolve`: the setting, then the repo this extension lives in,
+// then whatever is on PATH.
+//
+// There is deliberately no `<extension>/bin/cljd-resolve` candidate. Nothing
+// ships the daemon inside the extension and nothing can: it is babashka
+// reading `bb.edn` and `src/` from the repo root, driving a Dart helper that
+// only works after a `dart pub get` in `helper/` on the machine running it.
+// So the extension is installed *from* the repo -- README, *Installing it*.
 function daemonPath(context) {
   const configured = String(cfg().get('daemonPath') || '').trim();
   if (configured) return expandHome(configured);
 
-  // realpath first: a common install is a symlink from ~/.vscode/extensions
-  // into this repo, and `..` has to mean the repo, not the extensions dir.
+  // realpath first: the supported install is a symlink from
+  // ~/.vscode/extensions into this repo, and `..` has to mean the repo, not
+  // the extensions dir.
   let root = context.extensionPath;
   try { root = fs.realpathSync(root); } catch (e) { /* keep the raw path */ }
 
-  const candidates = [
-    path.join(root, 'bin', 'cljd-resolve'),        // packaged alongside
-    path.join(root, '..', 'bin', 'cljd-resolve'),  // running from the repo
-  ];
-  for (const p of candidates) if (fs.existsSync(p)) return p;
+  const inRepo = path.join(root, '..', 'bin', 'cljd-resolve');
+  if (fs.existsSync(inRepo)) return inRepo;
   return 'cljd-resolve';
 }
 

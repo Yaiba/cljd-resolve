@@ -279,7 +279,14 @@ ln -s "$PWD/extension" ~/.vscode/extensions/cljd-resolve
 ```
 
 The symlink is supported deliberately: the daemon is found by `realpath`ing the extension
-directory first, so `../bin/cljd-resolve` means this repo and not `~/.vscode/extensions`.
+directory first, so `../bin/cljd-resolve` means this repo and not `~/.vscode/extensions`. That
+is the extension's whole search — the repo above it, then `PATH` — so a daemon kept anywhere
+else has to be named in `cljd-resolve.daemonPath`.
+
+**macOS and Linux.** `bin/cljd-resolve` is POSIX `sh`, so `extension/package.json` declares
+`"os": ["darwin", "linux"]` rather than leaving the platform to be discovered at the first
+hover. Windows needs a `.cmd` launcher beside it and a second look at the `PATH` fallbacks in
+`daemonEnv`; nothing else is known to be in the way.
 
 **If hovers do nothing, it is almost always `bb`.** VSCode launched from Finder inherits a much
 barer `PATH` than your terminal does. *ClojureDart: Show Resolve Log* says so plainly; add the
@@ -290,7 +297,7 @@ are already tried as fallbacks).
 
 | setting | |
 |---|---|
-| `cljd-resolve.daemonPath` | path to `bin/cljd-resolve`; empty means next to the extension, then the repo above it, then `PATH` |
+| `cljd-resolve.daemonPath` | path to `bin/cljd-resolve`; empty means the repo above the extension, then `PATH` |
 | `cljd-resolve.extraPath` | directories prepended to `PATH` when spawning the daemon |
 | `cljd-resolve.requestTimeout` | ms to wait for one resolve (default 20000) |
 | `cljd-resolve.warmUp` | start the analyzer when a `.cljd` file opens (default true) |
