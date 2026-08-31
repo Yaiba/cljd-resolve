@@ -42,13 +42,23 @@
 
 (defonce ^:private line-index-cache (atom {}))
 
-(defn- line-index [file]
-  (let [f   (io/file file)
-        key [(.getPath f) (.lastModified f) (.length f)]]
-    (or (get @line-index-cache key)
-        (let [idx (line-starts (slurp f))]
-          (swap! line-index-cache assoc key idx)
-          idx))))
+(defn- line-index
+  "Line starts for `file`, cached.
+
+   Keyed on the path alone, with the stamp it was built from stored beside
+   the index: keying on the stamp too would mean every save of a file added a
+   permanent entry that is never hit and never evicted. This way a re-saved
+   file replaces its own entry."
+  [file]
+  (let [f          (io/file file)
+        path       (.getPath f)
+        stamp      [(.lastModified f) (.length f)]
+        [seen idx] (get @line-index-cache path)]
+    (if (= seen stamp)
+      idx
+      (let [fresh (line-starts (slurp f))]
+        (swap! line-index-cache assoc path [stamp fresh])
+        fresh))))
 
 (defn- offset->pos
   "Character offset in `file` -> 0-based {:line :character}."
