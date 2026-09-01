@@ -60,20 +60,23 @@
                       (when (seq opt)   [(str "[" (str/join ", " (map param-str opt)) "]")])
                       (when (seq named) [(str "{" (str/join ", " (map param-str named)) "}")])))))
 
-(def ^:private wrap-at
+(def ^:dynamic *wrap-at*
   "How wide a one-line declaration may be before its parameter list is broken
    one per line. A Flutter constructor blows past any such number -- `Text`'s
-   is 400-odd characters -- and a hover popup does not wrap it for you."
+   is 400-odd characters -- and a hover popup does not wrap it for you.
+
+   Dynamic because a completion list has the opposite constraint: one row per
+   candidate, however long the declaration is. See `detail`."
   72)
 
 (defn- arglist
   "The `(...)` of a declaration, given everything to the left of it. One line
-   while it fits inside `wrap-at`; past that, one parameter per line, broken
+   while it fits inside `*wrap-at*`; past that, one parameter per line, broken
    the way `dart format` breaks it -- the `{` or `[` rides the end of the line
    above, and every entry keeps its trailing comma."
   [prefix params]
   (let [flat (str prefix "(" (params-str params) ")")]
-    (if (<= (count flat) wrap-at)
+    (if (<= (count flat) *wrap-at*)
       flat
       (let [named (filter #(= :named (:kind %)) params)
             pos   (remove #(= :named (:kind %)) params)
@@ -123,3 +126,21 @@
         (param-str (assoc m :name name))
 
         (str name)))))
+
+(defn detail
+  "The one line a completion list has room for beside a candidate's name.
+
+   A value shows its type -- the name is already the label, so repeating it
+   there would spend the row on nothing. Anything callable shows its
+   declaration instead, never broken across lines however long it gets: the
+   list has one row per candidate, and `signature`'s wrapping is for a hover
+   popup that has as many as it needs."
+  [m name]
+  (when (map? m)
+    (if (#{:parameter :field} (:kind m))
+      (not-empty
+       (str/join " " (remove str/blank?
+                             [(when (and (:required m) (not= :positional (:kind m))) "required")
+                              (when (:static m) "static")
+                              (type-str (:type m))])))
+      (binding [*wrap-at* Long/MAX_VALUE] (signature m name)))))

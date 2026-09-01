@@ -296,6 +296,25 @@
   (when (library-uri? lib)
     (cached a [:elt lib name] #(ask! a (str "elt " lib " " name)))))
 
+(defn names
+  "The public top-level names `lib` exports, as `{\"AnimatedCrossFade\" :class}`.
+
+   The one question `element` cannot answer: it resolves a name you already
+   have, and completing `m/AnimatedCro` needs the set of names there are.
+   Coarse on purpose -- a name and a kind for the icon, nothing else. The
+   signature and the doc come from `element`, for the one candidate the user
+   lands on.
+
+   Cached for the session like everything else here, but with no staleness
+   check behind it: the answer carries no `:file`, so `stamps` finds nothing to
+   watch. A library whose own Dart gains a declaration needs `clearCache`.
+   `dart:` and `package:` -- which is all an alias may name -- do not gain one
+   while the editor is open."
+  [a lib]
+  (when (library-uri? lib)
+    (cached a [:names lib] #(let [v (ask! a (str "names " lib))]
+                              (when (map? v) v)))))
+
 (defn clear-cache! [a] (reset! (:cache a) {}))
 
 ;; ----------------------------------------------------------------- registry

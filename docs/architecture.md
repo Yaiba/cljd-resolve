@@ -3,7 +3,7 @@
 Three pieces, each of which knows nothing about the one below it:
 
 ```
-extension/  a VSCode HoverProvider and DefinitionProvider -- knows nothing about Dart
+extension/  VSCode hover, definition and completion providers -- knows nothing about Dart
 src/        a babashka daemon: cursor in a .cljd buffer -> Dart element
 helper/     a patched copy of ClojureDart's Dart-analyzer bridge
 ```
@@ -22,6 +22,14 @@ hover and a jump are made of and which upstream drops on the floor.
 Upgrading it — the pins, what breaks when they drift, and how to merge a new upstream —
 is [vendor/README.md](../vendor/README.md); `bb test:vendor` fails if the patch stops being
 small, additive and confined.
+
+`helper/bin/names.dart` sits beside it and is **not** vendored. It answers `names <lib>`, the
+whole export namespace of a library as `{"Text" :class …}` — the one question `elt` cannot be
+asked, since that needs a name you already have, and the one completing `m/AnimatedCro`
+depends on. It lives outside the patched file on purpose: `analyzer.dart` gains one import and
+a four-line `case` instead of forty lines to re-apply on every upstream merge. The pattern, and
+the import rule `bb test:vendor` enforces around it, are in
+[vendor/README.md](../vendor/README.md).
 
 ### New keys
 
@@ -68,6 +76,9 @@ The patch is additive, and `mk-live-analyzer-info` (`compiler.cljc:208`) maps ov
 generically — unknown scalar keys fall through its `:else [k v]` branch untouched. So the
 patched helper can stand in for the stock one in `.clojuredart/cache/<sha>/cljd_helper/bin/`
 without breaking a build. *(Verified by reading the compiler's reader, not by running a build.)*
+
+The claim is about the **directory**, not the file: `analyzer.dart` imports `names.dart`, so
+both have to travel together.
 
 ## The resolve daemon
 
@@ -142,26 +153,43 @@ per hover.
 
 ## The VSCode extension
 
-`extension/` registers a `HoverProvider` and a `DefinitionProvider` for `.cljd` files and
-answers both from one shared `resolve` call to the daemon. It knows nothing about Dart,
-rewrite-clj or the analyzer — the daemon owns all of that. Plain CommonJS with no dependencies
-and no build step: what is in the directory is what runs.
+`extension/` registers a `HoverProvider` and a `DefinitionProvider` for `.cljd` files — answered
+from one shared `resolve` call to the daemon — and a `CompletionItemProvider`, answered from
+`complete`. It knows nothing about Dart, rewrite-clj or the analyzer — the daemon owns all of
+that. Plain CommonJS with no dependencies and no build step: what is in the directory is what
+runs.
 
 ```
-extension.js   activation, the two providers, commands, status bar, warm-up
+extension.js   activation, the three providers, commands, status bar, warm-up
 client.js      the daemon subprocess and its JSON-RPC -- no `vscode` import
 hover.js       one resolve result -> hover markdown -- no `vscode` import
+completion.js  one complete result -> completion items -- no `vscode` import
 ```
 
-Neither `client.js` nor `hover.js` imports `vscode`, which is what makes the interesting half
-testable from plain node.
+None of `client.js`, `hover.js` or `completion.js` imports `vscode`, which is what makes the
+interesting half testable from plain node.
+
+Completion asks the daemon per keystroke and hands the list back marked **incomplete**: the
+daemon filters to the prefix it was asked about, so the list is right for that keystroke and not
+for a shorter one, and a backspace has to ask again. Each ask is a lookup into a class map the
+analyzer already holds. Docstrings are not in that list at all — the editor calls
+`resolveCompletionItem` for the row the user highlights, and only that row costs a `describe`.
 
 ### It sits beside Calva, not on top of it
 
 The selector is `{language: 'clojure', scheme: 'file', pattern: '**/*.cljd'}` — the same
-language Calva claims. That is fine: VSCode merges hovers from every provider that answers and
-offers multiple definitions as a peek list. Calva keeps answering for everything Clojure-shaped
-and we answer for the Dart edge; neither has to displace the other.
+language Calva claims. That is fine: VSCode merges hovers from every provider that answers,
+offers multiple definitions as a peek list, and pools completions from every provider into one
+list. Calva keeps answering for everything Clojure-shaped and we answer for the Dart edge;
+neither has to displace the other.
+
+Completion is where that matters most, because there is only one dropdown to share. What keeps
+the two apart is not where we answer but what we decline to: the daemon answers for an
+alias-qualified prefix (`m/Scaf`, `m.Colors/re`, `m/Text.ri`), a named argument (`.sty`) and a
+`:refer`red name, and returns nothing for anything else — including a bare prefix with nothing
+typed yet, which would otherwise put every symbol in the buffer in front of the user. An empty
+answer is contributed as no answer at all, so the list stays Calva's rather than gaining an
+empty row.
 
 ### What it does with a result
 

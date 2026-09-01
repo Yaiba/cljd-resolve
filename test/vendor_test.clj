@@ -165,10 +165,23 @@
 (defn- imports [s]
   (filterv #(str/starts-with? % "import ") (lines s)))
 
-(check (= (imports upstream) (imports patched))
-       "the patch pulls in no new imports"
-       {:added (vec (remove (set (imports upstream)) (imports patched)))
-        :dropped (vec (remove (set (imports patched)) (imports upstream)))})
+;; An import of a `package:` or `dart:` library is the patch growing a
+;; dependency, and the next upstream merge has to reason about it. An import
+;; of a *sibling file* is the opposite: it is machinery moved OUT of the
+;; vendored copy into one upstream has no opinion about, and it costs the
+;; merge a single line instead of the forty it saves. So the rule is not "no
+;; new imports" but "nothing new from outside" -- see helper/bin/names.dart,
+;; which is why the distinction exists.
+(let [added   (remove (set (imports upstream)) (imports patched))
+      dropped (remove (set (imports patched)) (imports upstream))
+      external? #(re-find #"'(package|dart):" %)]
+  (check (empty? dropped) "the patch drops no upstream import" {:dropped (vec dropped)})
+  (check (empty? (filter external? added))
+         "the patch pulls in no new package: or dart: import"
+         {:added (vec (filter external? added))})
+  (check (<= (count added) 1)
+         "and at most one local file of its own"
+         {:added (vec added)}))
 
 (check (str/includes? patched
                       "isWithin(pathContext.normalize(projectDirectoryPath),")

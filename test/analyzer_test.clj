@@ -176,6 +176,41 @@
 (println "\nelt" lib t/unknown-element)
 (check (nil? (elt t/unknown-element)) "unknown element -> nil")
 
+;; ------------------------------------------------------------------- names
+;;
+;; The one question `elt` cannot answer -- it resolves a name you already have.
+;; Lives in helper/bin/names.dart rather than in the vendored analyzer.dart,
+;; so the patch stays an import and a `case`. See vendor/README.md.
+
+(println "\nnames" lib)
+(let [ns (ask (str "names " lib))]
+  (check (map? ns) "a library answers with a map of name -> kind" (type ns))
+  (check (every? string? (keys ns)) "keyed by name")
+  (check (every? keyword? (vals ns)) "valued by kind" (take 3 (vals ns)))
+  (check (= :class (get ns (:text v))) (str (:text v) " is a class") (get ns (:text v)))
+  (check (= :class (get ns (:panel v))) (str (:panel v) " is a class"))
+  (check (= :enum (get ns (:enum v))) (str (:enum v) " is an enum") (get ns (:enum v)))
+  (check (contains? ns (:colors v)) (str (:colors v) " is exported"))
+  ;; A setter is exported under `foo=`, which is not a name anything completes
+  ;; to -- and its getter is already in the map under `foo`.
+  (check (not-any? #(str/ends-with? % "=") (keys ns))
+         "no `foo=` setter names" (filter #(str/ends-with? % "=") (keys ns)))
+  (check (not-any? #(str/starts-with? % "_") (keys ns))
+         "nothing private" (filter #(str/starts-with? % "_") (keys ns)))
+  ;; Everything `elt` can be asked about has to be in here, or completion
+  ;; offers names the hover cannot then answer for.
+  (check (every? #(some? (elt %)) [(:text v) (:panel v) (:enum v)])
+         "and every name in it resolves as an element"))
+
+(println "\nnames dart:math")
+(let [ns (ask "names dart:math")]
+  (check (= :function (get ns "max")) "max is a function" (get ns "max"))
+  (check (= :field (get ns "pi")) "pi is a field -- a top-level const" (get ns "pi")))
+
+(println "\nnames -- a library that is not there")
+(check (nil? (ask "names package:no_such_package/nope.dart"))
+       "an unresolvable library -> nil")
+
 ;; ----------------------------------------------------------------
 
 (.close in)

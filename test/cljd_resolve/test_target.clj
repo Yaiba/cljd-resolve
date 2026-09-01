@@ -55,6 +55,7 @@
 (def ^:private material
   {:text             "Text"
    :text-doc         "A run of text with a single style."
+   :named-ctor       "Text.rich"
    :style-param      "style"
    :style-doc        "If non-null, the style to use"
    :method           "build"
@@ -83,6 +84,7 @@
    {:lib              "package:cljd_resolve_fixture/widgets.dart"
     :text             "Label"
     :text-doc         "A run of text with a single style."
+    :named-ctor       "Label.rich"
     :style-param      "style"
     :style-doc        "If non-null, the style to use"
     :method           "build"

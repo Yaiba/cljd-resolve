@@ -1,6 +1,6 @@
 # cljd-resolve
 
-Hover docs and jump-to-definition for ClojureDart in VSCode.
+Hover docs, jump-to-definition and Dart completion for ClojureDart in VSCode.
 
 Put the cursor on `m/Text`, `m.Colors/red` or a `.style` argument in a `.cljd` file and get the
 real Dart doc comment — and `F12` to the declaration in the Flutter SDK. It works by resolving
@@ -29,7 +29,7 @@ and its available parameters.
 
 ![Hovering Scaffold shows its resolved constructor signature and parameters.](docs/cljd-constructor.png)
 
-**Status:** hover, jump-to-definition and the `cmd+enter` binding all work. There is no
+**Status:** hover, jump-to-definition, completion and the `cmd+enter` binding all work. There is no
 marketplace release — it runs from a checkout, so [installing](#install) means a symlink or a
 scratch window.
 
@@ -75,8 +75,9 @@ cost off your first hover. After it, a hover is ~13 ms.
 | `m/Text` elsewhere | the class `Text` in the aliased library |
 | `m/Text.rich` | its named constructor |
 | `m.Colors/red` | static member `red` of `Colors` |
+| `m/Colors.red` | the same static, in the spelling that shares its shape with `m/Text.rich` |
 | `pi` (`:refer`red) | top-level `pi` in `dart:math` |
-| `.style` | the named parameter of the enclosing constructor call — else a field or method of that class |
+| `.style` | the named parameter of the enclosing constructor call — named or unnamed — else a field or method of that class |
 
 Aliases come from the `ns` form, and only string requires get one: `[cljd.flutter :as f]` has
 nothing behind it the analyzer can answer for, so `f/run` deliberately resolves to nothing.
@@ -84,6 +85,26 @@ nothing behind it the analyzer can answer for, so `f/run` deliberately resolves 
 **What it gives up on:** `(.substring s 1)` — a method call on a value — needs real type
 inference, so it resolves to nothing rather than to a guess. An unresolvable cursor is always
 silent, never an error.
+
+## What completes
+
+The same shapes, asked the other way round. Type the prefix and the Dart names appear in the
+usual dropdown, beside Calva's own suggestions rather than instead of them:
+
+| you type | you get |
+|---|---|
+| `.sty` in `(m/Text "hi" …)` | `style` — the named parameters of that constructor |
+| `m.Colors/re` | `red`, `redAccent`, … — the **statics** of `Colors`, since that is all this spelling can reach |
+| `m/Text.ri` | `Text.rich` — its named constructors, **and** its statics: `m/Icons.ad` offers 142 icons |
+| `p` (`:refer`red) | `pi` |
+| `m/AnimatedCro` | `AnimatedCrossFade` — every public name in the aliased library |
+
+Docs and the full signature arrive for the row you highlight, not for the whole list — the
+material library alone has 1865 names. Anything offered is something the hover then has an
+answer for.
+
+Completion answers only for those shapes and stays quiet everywhere else, so Clojure's own names
+are left to Calva. Nothing has to be turned off on either side.
 
 ## Settings and commands
 

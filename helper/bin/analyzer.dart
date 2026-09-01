@@ -10,6 +10,7 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:path/path.dart';
+import 'names.dart';
 
 bool isPublic(Element e) => e.isPublic;
 
@@ -506,6 +507,11 @@ void main(args) async {
         } else {
           print("nil");
         }
+        break;
+      case "names":
+        print(await retrieveNames(
+                resourceProvider, coll, tokens[1], projectDirectoryPath) ??
+            "nil");
         break;
       case "elt":
         var elem =

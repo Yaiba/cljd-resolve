@@ -210,3 +210,149 @@
                :range (z/position-span zloc)
                :head? (call-head? zloc)
                :owners (when (= :dot-name (:kind c)) (owner-candidates zloc)))))))
+
+;; ---------------------------------------------------------------- completion
+;;
+;; Completion asks about a symbol that is still being typed, and the shapes
+;; that matter most are the ones rewrite-clj will not read at all: `m/`,
+;; `m.Colors/` and `m/Text.` are not symbols, so `cursor-info` answers nil at
+;; exactly the keystroke that should open a dropdown. (A non-empty prefix --
+;; `m/Scaf`, `.sty` -- is already a readable token and needs none of this.)
+;;
+;; So a sentinel name character is spliced in at the cursor before parsing,
+;; and removed again by position afterwards. Splicing rather than appending
+;; because the cursor is not always at the end of its token: `m/Scaf|fold` is
+;; a real thing to ask about, and its answer replaces the whole token while
+;; filtering on only what precedes the cursor.
+
+(def ^:private sentinel
+  "The character spliced in at the cursor so the token parses. Any symbol
+   character does -- it is removed by index, never by name -- and it never
+   leaves this namespace: it goes into the buffer handed to rewrite-clj and
+   comes straight back out of every string reported from here."
+  "X")
+
+(defn- cursor-at
+  "1-based `[row col]` in `text` as `[offset col]`, both clamped to the end of
+   that row -- a column past the line end is a cursor in the trailing
+   whitespace an editor allows, not a position on a later line. The clamped
+   column comes back with the offset because everything downstream measures
+   against the same one; clamping only the offset is how the sentinel lands in
+   one place and gets looked for in another.
+
+   nil when `row` is past the end of the buffer."
+  [^String text row col]
+  (loop [i 0, r 1]
+    (if (= r row)
+      (let [eol (let [n (.indexOf text "\n" i)] (if (neg? n) (count text) n))
+            off (min (+ i (dec col)) eol)]
+        [off (inc (- off i))])
+      (let [n (.indexOf text "\n" i)]
+        (when-not (neg? n) (recur (inc n) (inc r)))))))
+
+(defn- strip-at
+  "`s` without the character at 0-based `i`."
+  [^String s i]
+  (str (subs s 0 i) (subs s (inc i))))
+
+(defn- segment-start
+  "Where the part being completed begins inside a token: after the `/` of a
+   qualified symbol, after the leading `.` or `.-` of a named argument, and at
+   the start of a bare one.
+
+   `m/Text.rich` deliberately keeps its `Text.` inside the segment: the
+   analyzer keys a named constructor under the whole of it, so that is what a
+   candidate has to be filtered against."
+  [kind ^String s]
+  (case kind
+    :qualified (inc (.indexOf s "/"))
+    :dot-name  (if (str/starts-with? s ".-") 2 1)
+    0))
+
+(defn- spliced
+  "`text` with the sentinel at 1-based `[row col]`, and the column it landed
+   in -- clamped, so the two always agree about where it is. nil past the end
+   of the buffer."
+  [text row col]
+  (when-let [[off col] (cursor-at text row col)]
+    [(str (subs text 0 off) sentinel (subs text off)) col]))
+
+(defn- info-at
+  "`completion-info`, given a buffer the sentinel is already in."
+  [text' row col]
+  (when-let [cur (cursor-info text' [row col])]
+    (let [[[r1 c1] [r2 c2]] (:range cur)
+          kind (:kind cur)
+          i    (- col c1)                  ; the sentinel's index in the token
+          s    (strip-at (:symbol cur) i)  ; the token as actually typed
+          seg  (segment-start kind s)]
+      ;; The sentinel is what makes the token parse, so everything left of it
+      ;; -- the alias, the `/`, the leading `.` -- is already clean. A cursor
+      ;; *before* the segment is asking to complete something that is not a
+      ;; name: `m|/Text`, or the `.` of `.style`.
+      (when (<= seg i)
+        (let [tail   (subs s seg)                    ; the whole segment
+              quali  (when (= :qualified kind) (subs s 0 (dec seg)))
+              target (case kind
+                       :dot-name :named-args
+                       :bare     :refers
+                       (cond
+                         ;; m.Colors/re -- the type is named before the `/`
+                         (str/includes? quali ".")  :members
+                         ;; m/Text.ri -- and here, inside the segment
+                         (str/includes? tail ".")   :constructors
+                         :else                      :library))]
+          (cond-> {:target  target
+                   :prefix  (subs s seg i)
+                   :symbol  s
+                   :range   [[r1 c1] [r2 (dec c2)]]
+                   :segment [[r1 (+ c1 seg)] [r2 (dec c2)]]}
+            (= :qualified kind)   (assoc :alias (:alias cur))
+            ;; `:type` is read back off the clean token rather than taken from
+            ;; `classify`, which saw the sentinel: for a constructor the type
+            ;; sits inside the segment, so `m/Te|xt.rich` would otherwise
+            ;; resolve against `TeXxt`.
+            (= :members target)      (assoc :type (:type cur))
+            (= :constructors target) (assoc :type (first (str/split tail #"\." 2)))
+            (= :named-args target)   (assoc :owners (:owners cur))))))))
+
+(defn completion-info
+  "What is being typed at 1-based `[row col]`, where the cursor sits *before*
+   `col` -- so the prefix is the completing segment up to it, and what follows
+   is the rest of a token being edited in the middle.
+
+     m/Scaf      => {:target :library      :alias \"m\"                :prefix \"Scaf\"}
+     m.Colors/re => {:target :members      :alias \"m\" :type \"Colors\" :prefix \"re\"}
+     m/Text.ri   => {:target :constructors :alias \"m\" :type \"Text\"   :prefix \"Text.ri\"}
+     .sty        => {:target :named-args   :owners [\"m/Text\"]        :prefix \"sty\"}
+     pi          => {:target :refers                                 :prefix \"pi\"}
+
+   `:segment` is the span an accepted candidate replaces, `:range` the whole
+   token; both 1-based and end-exclusive, like `cursor-info`'s. A prefix may be
+   empty -- that is `m/`, the keystroke this exists for -- and nil comes back
+   only where no Dart name can go: a string, a comment, a number, or a cursor
+   sitting before the segment it would complete.
+
+   Descriptive, not a policy. An empty `:refers` prefix is reported like any
+   other, and it is the caller that decides offering every bare symbol in the
+   buffer is Calva's job rather than ours."
+  [text [row col]]
+  (when-let [[text' col] (spliced text row col)]
+    (info-at text' row col)))
+
+(defn completion-context
+  "=> {:cursor <completion-info> :ns <ns-info>}, both read off the *same*
+   repaired buffer.
+
+   They have to be. `m/` and `m.Colors/` are not readable symbols -- that is
+   the whole reason the sentinel exists -- so a buffer holding one does not
+   parse at all, and an alias table read off the raw text comes back empty at
+   exactly the keystroke completion exists for. Nothing resolves without an
+   alias, so completion would work everywhere except where it is needed.
+
+   nil past the end of the buffer; `:cursor` may be nil on its own where no
+   Dart name can go, and the alias table is still worth having there."
+  [text [row col]]
+  (when-let [[text' col] (spliced text row col)]
+    {:cursor (info-at text' row col)
+     :ns     (ns-info text')}))

@@ -56,7 +56,9 @@
          (str "      ." (:callback-param v) " callback")
          (str "      ." (:named-callback-param v) " builder")
          (str "      ." (:generic-callback-param v) " comparator)")])
-      [(str "    m/" t/unknown-element "))")])))
+      [(str "    m/" (:colors v) "." (:color-field v))
+       (str "    (m/" (:named-ctor v) " \"hi\" ." (:style-param v) " nil)")
+       (str "    m/" t/unknown-element "))")])))
 
 ;; ------------------------------------------------------------------ harness
 
@@ -228,6 +230,216 @@
       r    (rpc "resolve" {:file file :text bad :line line :character (inc character)})]
   (check (nil? r) "the cursor resolves to nothing rather than being sent" r))
 (check (some? (at-sym (str "m/" (:plain v)))) "and the helper still answers afterwards")
+
+;; ------------------------------------------------------------------ completion
+;;
+;; The same shapes asked the other way round: not "what is this symbol" but
+;; "what could it become". Each case gets its own buffer, one half-typed token
+;; in it, because that is what a buffer being typed into actually looks like.
+
+(println (str "\nm/" (:colors v) "." (:color-field v)
+              "  -- a static through the slash-and-dot spelling"))
+;; Written this way as often as `m.Colors/red` in real cljd code, and spelled
+;; exactly like the named constructor `m/Text.rich` -- the class map keys the
+;; two differently, so only one of them can be a straight lookup.
+(let [r (at-sym (str "m/" (:colors v) "." (:color-field v)))]
+  (check (= "field" (:kind r)) "kind" r)
+  (check (= (:color-signature v) (:signature r)) "signature" r)
+  (check (= (:colors v) (:container r)) "container is the type" r)
+  (check (located? r (:color-field v)) "jumps to the static field" (:defRange r)))
+
+(println (str "\n(m/" (:named-ctor v) " ...)  -- a named constructor heads a call"))
+(let [r (at-sym (str "." (:style-param v)) 2)]     ; the 2nd is inside the m/…rich call
+  (check (= "parameter" (:kind r)) "its named arguments resolve" r)
+  (check (str/starts-with? (or (:container r) "") (:named-ctor v))
+         "against that constructor, not the unnamed one" r)
+  (check (= (str "m/" (:named-ctor v)) (:owner r)) "owned by the call head" r))
+
+(println "\ncompletion")
+
+(def completion-head
+  [(str "(ns acme.completing")
+   (str "  (:require [\"" (:lib v) "\" :as m]")
+   "            [\"dart:math\" :as math :refer [pi]]"
+   "            [cljd.flutter :as f]))"
+   "(defn main []"
+   "  (f/run"])
+
+(defn completing
+  "Completions for `line` appended to a real ns form, cursor at its end."
+  [line]
+  (rpc "complete" {:file file :text (str/join "\n" (conj completion-head line))
+                   :line (count completion-head) :character (count line)}))
+
+(defn labels [r] (mapv :label (:items r)))
+(defn item-of [r label] (first (filter #(= label (:label %)) (:items r))))
+(defn offers? [r label] (some? (item-of r label)))
+
+;; `.sty` -- named parameters of the enclosing constructor call
+(let [line (str "    (m/" (:text v) " \"hi\" ." (subs (:style-param v) 0 2))
+      r    (completing line)
+      it   (item-of r (:style-param v))]
+  (check (= "named-args" (:target r)) "a `.name` completes named arguments" r)
+  (check (= (subs (:style-param v) 0 2) (:prefix r)) "prefix is what precedes the cursor" r)
+  (check (some? it) (str "offers ." (:style-param v)) (labels r))
+  (check (= "parameter" (:kind it)) "as a parameter, not the field it forwards to" it)
+  (check (= (str (:text v) "(" (:style-param v) ":)") (:container it))
+         "container names the constructor it belongs to" it)
+  (check (string? (:detail it)) "carries a one-line detail for the dropdown" it)
+  (check (= 1 (count (filter #{(:style-param v)} (labels r))))
+         "and offers it once -- the parameter shadows the field of the same name"
+         (labels r))
+  ;; The invariant that makes this safe: anything offered is something the
+  ;; hover can then answer for, because both walk the class map the same way.
+  (check (every? (fn [{:keys [label]}]
+                   (some? (rpc "describe" {:file file :lib (:lib r) :type (:type r)
+                                           :label label :target (:target r)})))
+                 (:items r))
+         "every candidate offered is one `describe` resolves" (labels r)))
+
+;; The empty prefix -- `.` on its own, which is not a readable token at all
+(let [r (completing (str "    (m/" (:text v) " \"hi\" ."))]
+  (check (= "named-args" (:target r)) "a bare `.` still classifies" r)
+  (check (= "" (:prefix r)) "with an empty prefix" r)
+  (check (offers? r (:style-param v)) "and offers the whole parameter list" (labels r)))
+
+;; `m.Colors/` -- statics through a dotted alias. The trailing `/` is the
+;; shape rewrite-clj cannot read, so this is the one that proves the alias
+;; table survives the repair.
+(let [r  (completing (str "    m." (:colors v) "/"))
+      it (item-of r (:color-field v))]
+  (check (= "members" (:target r)) "a dotted alias completes members" r)
+  (check (= (:colors v) (:type r)) "of the type named before the `/`" r)
+  (check (some? it) (str "offers " (:color-field v)) (take 8 (labels r)))
+  (check (str/starts-with? (or (:detail it) "") "static") "detail says static" it)
+  ;; Offering an instance member here would be offering something that does
+  ;; not compile: `m.Type/name` is static access and nothing else.
+  (check (every? #(str/starts-with? (or (:detail %) "") "static") (:items r))
+         "and offers nothing but statics"
+         (remove #(str/starts-with? (or (:detail %) "") "static") (:items r))))
+
+;; `m/Text.` -- named constructors
+(let [r  (completing (str "    m/" (:text v) "."))
+      it (item-of r (:named-ctor v))]
+  (check (= "constructors" (:target r)) "a trailing dot completes named constructors" r)
+  (check (= (:text v) (:type r)) "of the type before it" r)
+  (check (some? it) (str "offers " (:named-ctor v)) (labels r))
+  (check (= "constructor" (:kind it)) "kind" it)
+  (check (not (offers? r (:text v)))
+         "but not the unnamed one -- the cursor has committed to a dot" (labels r))
+  (check (some? (rpc "describe" {:file file :lib (:lib r) :type (:type r)
+                                 :label (:named-ctor v) :target (:target r)}))
+         "and `describe` resolves it"))
+
+;; A `:refer`red name, answered off the ns table
+(let [r (completing "    p")]
+  (check (= "refers" (:target r)) "a bare symbol reports as :refers" r)
+  (check (offers? r "pi") "offers the :refer'd pi" (labels r))
+  (check (= "dart:math" (:container (item-of r "pi"))) "named against its library" r))
+(check (empty? (:items (completing "    ")))
+  "an empty bare prefix offers nothing -- Clojure's own names are Calva's job")
+
+;; The one shape still missing, and the reason it is (cljd-resolve-26b): the
+;; helper answers `elt` for a name you already have, and cannot be asked what
+;; names a library holds.
+(let [r  (completing (str "    m/" (subs (:panel v) 0 3)))
+      it (item-of r (:panel v))]
+  (check (= "library" (:target r)) "an aliased prefix completes the library" r)
+  (check (= (subs (:panel v) 0 3) (:prefix r)) "filtered to the prefix" r)
+  (check (some? it) (str "offers " (:panel v)) (labels r))
+  (check (= "class" (:kind it)) "as a class" it)
+  (check (every? #(str/starts-with? (:label %) (subs (:panel v) 0 3)) (:items r))
+         "and nothing that does not match" (labels r))
+  ;; No detail on these. The list is the whole library -- 1866 names for
+  ;; package:flutter/material.dart -- and a signature apiece would mean
+  ;; resolving every one of them to fill a column the user reads one row of.
+  (check (nil? (:detail it)) "carrying no signature, which the list has no room for" it)
+  (let [d (rpc "describe" {:file file :lib (:lib r) :label (:panel v) :target "library"})]
+    (check (= "class" (:kind d)) "`describe` fills that in for the highlighted row" d)
+    (check (string? (:doc d)) "with the class doc" (head (:doc d) 40))
+    (check (some? (:defUri d)) "and somewhere to jump to" d)))
+
+;; A whole library really is the whole library, and its shape is the one the
+;; hover can answer for.
+(let [r (completing "    m/")]
+  (check (= "" (:prefix r)) "an empty alias prefix is the whole export namespace" r)
+  (check (> (count (:items r)) 10) "which is more than a handful" (count (:items r)))
+  (check (some? (item-of r (:text v))) (str "including " (:text v)))
+  (check (some? (item-of r (:enum v))) (str "and the enum " (:enum v)))
+  (check (= "enum" (:kind (item-of r (:enum v)))) "kinded as an enum" (item-of r (:enum v)))
+  (check (not-any? #(str/starts-with? (:label %) "_") (:items r))
+         "and nothing private"))
+
+;; A library nobody can resolve answers with nothing -- not, as the analyzer
+;; would have it left alone, with the whole of `dart:core` under the alias.
+(let [r (rpc "complete" {:file file
+                         :text (str/join "\n" ["(ns acme.bogus"
+                                               "  (:require [\"package:no_such_package/nope.dart\" :as m]))"
+                                               "(defn main [] (m/Sca"])
+                         :line 2 :character 20})]
+  (check (= "library" (:target r)) "the shape still classifies" r)
+  (check (empty? (:items r)) "but there is nothing behind the alias" (take 5 (labels r))))
+
+;; Spans. The editor filters and replaces against these, so they must describe
+;; the buffer as typed, with no trace of the sentinel that made it parse.
+(let [line (str "    m." (:colors v) "/")
+      r    (completing line)]
+  (check (= {:line (count completion-head) :character (count line)}
+            (get-in r [:segment :start]))
+         "an empty segment is the empty span at the cursor" (:segment r))
+  (check (= (get-in r [:segment :start]) (get-in r [:segment :end]))
+         "start and end alike" (:segment r))
+  (check (= 4 (get-in r [:range :start :character]))
+         "the range covers the whole token" (:range r)))
+(let [line (str "    (m/" (:text v) " \"hi\" ." (subs (:style-param v) 0 2))
+      r    (completing line)]
+  (check (= (- (count line) 2) (get-in r [:segment :start :character]))
+         "a named argument's segment starts after the leading `.`" (:segment r))
+  (check (= (count line) (get-in r [:segment :end :character]))
+         "and runs to the end of the token" (:segment r)))
+
+;; Nowhere a Dart name can go.
+(check (nil? (completing (str "    (m/" (:text v) " \"hi")))
+       "inside a string literal, no completion at all")
+(check (nil? (completing "    ;; a comment"))
+       "inside a comment")
+
+;; `m/Type.name` reaches two different things, and real cljd code uses both:
+;; `m/Text.rich` is a named constructor, `m/Icons.add` and `m/Colors.yellow`
+;; are statics. Offering only the first answers nothing at all for a library
+;; of icons or colours.
+(let [r  (completing (str "    m/" (:colors v) "." (subs (:color-field v) 0 1)))
+      it (item-of r (str (:colors v) "." (:color-field v)))]
+  (check (= "constructors" (:target r)) "a static reached with a slash and a dot" r)
+  (check (= (:colors v) (:type r)) "names its type" r)
+  (check (some? it) (str "offers " (:colors v) "." (:color-field v)) (take 6 (labels r)))
+  (check (= "field" (:kind it)) "as the field it is" it)
+  ;; The label is what gets inserted; the key it lives under in the class map
+  ;; is the bare name, and `describe` needs that one.
+  (check (= (:color-field v) (:member it)) "carrying the key it is stored under" it)
+  (let [d (rpc "describe" {:file file :lib (:lib r) :type (:type r)
+                           :label (:label it) :member (:member it) :target (:target r)})]
+    (check (= (:color-signature v) (:signature d))
+           "and `describe` resolves it through that key" d)))
+
+;; A named constructor heads a call as ordinarily as an unnamed one, and its
+;; named arguments are its own.
+(let [r  (completing (str "    (m/" (:named-ctor v) " ." (subs (:style-param v) 0 2)))
+      it (item-of r (:style-param v))]
+  (check (= "named-args" (:target r)) "a named-constructor call head owns its arguments" r)
+  (check (= (:text v) (:type r)) "resolved against the class" r)
+  (check (= (:named-ctor v) (:ctor r)) "and against that constructor in particular" r)
+  (check (some? it) (str "offers ." (:style-param v)) (labels r))
+  (check (str/starts-with? (or (:container it) "") (:named-ctor v))
+         "attributed to the constructor that offered it" it))
+
+;; Two constructors can share a parameter name and disagree about it, so the
+;; constructor the list came from has to travel with the candidate.
+(let [r (completing (str "    (m/" (:named-ctor v) " ." (subs (:style-param v) 0 2)))
+      d (rpc "describe" {:file file :lib (:lib r) :type (:type r) :ctor (:ctor r)
+                         :label (:style-param v) :target (:target r)})]
+  (check (str/starts-with? (or (:container d) "") (:named-ctor v))
+         "`describe` reads the parameter off the same constructor" d))
 
 (println "\ncaching")
 (let [t0 (System/currentTimeMillis)

@@ -22,6 +22,30 @@ that reason.
 `bb test:vendor` enforces all of this. It is a fast, Dart-free check and runs
 as part of `bb test`.
 
+## The way to add behaviour without growing the patch
+
+`helper/bin/names.dart` is the worked example, and the pattern to copy.
+
+Completion needs to enumerate a library's exported names, and only the helper
+can see `exportNamespace` — so this is squarely the case the standing rule
+carves out. Inlining it would have cost the patch about forty lines, every one
+of them to re-apply by hand on the next merge.
+
+Instead the machinery lives in `names.dart`, which is **not vendored**:
+upstream has no opinion about it, no merge ever touches it, and
+`analyzer.dart` gains one import and a four-line `case` that delegates. Eight
+changed lines instead of forty, no new declarations, no new EDN keys.
+
+So `bb test:vendor` does not forbid new imports outright — it forbids new
+`package:` and `dart:` imports, and allows a single sibling file. That is the
+distinction that matters: nothing new from *outside*, and machinery pushed
+*out* of the vendored copy is a patch getting smaller, not larger.
+
+One caveat this creates, and the reason it is written down here: the drop-in
+claim in docs/architecture.md is now about `helper/bin/` as a directory rather
+than about `analyzer.dart` as a single file. A cljd build using our helper
+needs both files.
+
 ## The pins
 
 ```edn
@@ -79,12 +103,12 @@ Measured against the current tree by `bb test:vendor`:
 | | |
 |---|---|
 | upstream | 500 lines |
-| patched | 596 lines |
-| changed lines (added + removed) | 124 |
+| patched | 602 lines |
+| changed lines (added + removed) | 130 |
 | removed lines | 14 |
 | new top-level declarations | `S`, `stripDoc`, `deSynth`, `addMeta`, `paramDocSource` |
 | new EDN keys | `:doc`, `:file`, `:offset`, `:length` |
-| new imports | none |
+| new imports | one, `names.dart` — a sibling of ours, nothing external |
 
 Thirteen of the 14 removed lines are not deletions of behaviour. Twelve are
 `return {` / `classData[…] = {` lines rewritten to hoist a map literal into a

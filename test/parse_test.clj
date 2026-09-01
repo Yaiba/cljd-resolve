@@ -132,6 +132,101 @@
          "(.substring s 1) -- a method call on a value is left alone"
          (owners 17 6)))
 
+;; ---------------------------------------------------------------- completion
+;;
+;; The half-typed symbol. Non-empty prefixes already parse; the empty ones --
+;; `m/`, `m.Colors/`, `m/Text.` -- are not readable symbols at all, and they
+;; are the keystroke a dropdown is expected on.
+
+(println "\ncompletion-info")
+
+;; A buffer whose ns table is the one above, so a completion can be asked for
+;; on any line appended to it.
+(defn- typing
+  "`completion-info` for `line` appended to a real ns form, with the cursor
+   before 1-based column `col`."
+  [line col]
+  (parse/completion-info
+    (str "(ns a (:require [\"package:flutter/material.dart\" :as m]\n"
+         "                [\"dart:math\" :refer [pi]]))\n"
+         line)
+    [3 col]))
+
+(defn- shape [line col ks]
+  (select-keys (typing line col) ks))
+
+(check= {:target :library :alias "m" :prefix "Scaf"}
+  (shape "(m/Scaf" 8 [:target :alias :prefix])
+  "m/Scaf -- top-level names of the aliased library")
+(check= {:target :library :alias "m" :prefix ""}
+  (shape "(m/" 4 [:target :alias :prefix])
+  "m/ -- an empty prefix, which rewrite-clj cannot read as a symbol at all")
+(check= {:target :members :alias "m" :type "Colors" :prefix "re"}
+  (shape "(m.Colors/re" 13 [:target :alias :type :prefix])
+  "m.Colors/re -- static members of the type named before the `/`")
+(check= {:target :members :alias "m" :type "Colors" :prefix ""}
+  (shape "(m.Colors/" 11 [:target :alias :type :prefix])
+  "m.Colors/ -- empty again")
+(check= {:target :constructors :alias "m" :type "Text" :prefix "Text.ri"}
+  (shape "(m/Text.ri" 11 [:target :alias :type :prefix])
+  "m/Text.ri -- named constructors, whose keys carry the type")
+(check= {:target :constructors :alias "m" :type "Text" :prefix "Text."}
+  (shape "(m/Text." 9 [:target :alias :type :prefix])
+  "m/Text. -- the other unreadable one")
+(check= {:target :named-args :prefix "sty"}
+  (shape "(m/Text \"hi\" .sty" 18 [:target :prefix])
+  ".sty -- named parameters of the enclosing call")
+(check= "m/Text" (first (:owners (typing "(m/Text \"hi\" .sty" 18)))
+  ".sty still finds its owner through the spliced sentinel")
+(check= {:target :named-args :prefix ""}
+  (shape "(m/Text \"hi\" ." 15 [:target :prefix])
+  ". -- an empty named argument")
+(check= {:target :refers :prefix "p"}
+  (shape "(p" 3 [:target :prefix])
+  "a bare symbol reports as :refers -- the caller decides what to do with it")
+
+;; The cursor is not always at the end of the token it is in.
+(check= {:target :library :prefix "Scaf" :symbol "m/Scaffold"}
+  (shape "(m/Scaffold" 8 [:target :prefix :symbol])
+  "m/Scaf|fold -- filters on what precedes the cursor, replaces the whole token")
+(check= {:target :constructors :type "Text" :prefix "Te"}
+  (shape "(m/Text.rich" 6 [:target :type :prefix])
+  "m/Te|xt.rich -- the type is read off the clean token, not off the sentinel")
+
+;; Spans. `:segment` is what an accepted candidate replaces; `:range` is the
+;; token it sits in. Both must be the positions of the buffer as typed, with
+;; no trace of the sentinel that made it parse.
+(check= [[3 2] [3 8]] (:range (typing "(m/Scaf" 8))
+  ":range spans exactly the typed token")
+(check= [[3 4] [3 8]] (:segment (typing "(m/Scaf" 8))
+  ":segment starts after the `/`, so the editor filters on `Scaf` not `m/Scaf`")
+(check= [[3 4] [3 4]] (:segment (typing "(m/" 4))
+  "an empty segment is the empty span at the cursor")
+(check= [[3 15] [3 18]] (:segment (typing "(m/Text \"hi\" .sty" 18))
+  ":segment starts after the leading `.`")
+(check= [[3 4] [3 12]] (:segment (typing "(m/Scaffold" 8))
+  ":segment runs to the end of the token, not to the cursor")
+
+;; Where no Dart name can go.
+(check (nil? (typing "(m/Text \"hi" 11)) "inside a string literal")
+(check (nil? (typing "(m/Text ;; a comment" 15)) "inside a comment")
+(check (nil? (typing "(m/Text" 3)) "m|/Text -- the cursor is before the segment")
+(check= {:target :refers :prefix ""} (shape "  " 2 [:target :prefix])
+  "whitespace reports an empty bare prefix, not nil -- the policy lives downstream")
+(check (nil? (parse/completion-info "(m/Scaf" [9 2])) "a row past the end of the buffer")
+(check (some? (typing "(m/Scaf" 99))
+  "a column past the end of the line clamps to it rather than sliding down a row")
+
+;; The sentinel is an implementation detail and must not appear in any string
+;; that comes back.
+(doseq [[label line col] [["m/Scaf" "(m/Scaf" 8] ["m/" "(m/" 4]
+                          ["m.Colors/" "(m.Colors/" 11] ["m/Text." "(m/Text." 9]
+                          [".sty" "(m/Text \"hi\" .sty" 18]]]
+  (let [info (typing line col)
+        strs (filter string? (concat (vals info) (:owners info)))]
+    (check (not-any? #(str/includes? % "X") strs)
+           (str "no sentinel leaks out of " label) strs)))
+
 ;; ------------------------------------------------------------------- render
 
 (println "\nrender")

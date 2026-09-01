@@ -10,7 +10,7 @@ function makeApi() {
   const rec = {
     output: [],
     commands: new Map(),
-    providers: { hover: [], definition: [] },
+    providers: { hover: [], definition: [], completion: [] },
     listeners: { open: [], activeEditor: [], config: [] },
     messages: [],
     status: null,
@@ -34,12 +34,26 @@ function makeApi() {
   class Hover {
     constructor(contents, range) { this.contents = contents; this.range = range; }
   }
+  class CompletionItem {
+    constructor(label, kind) { this.label = label; this.kind = kind; }
+  }
+  class CompletionList {
+    constructor(items, isIncomplete) { this.items = items; this.isIncomplete = isIncomplete; }
+  }
 
   const api = {
     Position,
     Range,
     MarkdownString,
     Hover,
+    CompletionItem,
+    CompletionList,
+    // The real enum, by the names extension/completion.js maps onto.
+    CompletionItemKind: {
+      Text: 0, Method: 1, Function: 2, Constructor: 3, Field: 4, Variable: 5,
+      Class: 6, Interface: 7, Module: 8, Property: 9, Unit: 10, Value: 11,
+      Enum: 12, Keyword: 13, Snippet: 14, EnumMember: 19, Constant: 20,
+    },
     StatusBarAlignment: { Left: 1, Right: 2 },
     Uri: { parse: (s) => ({ toString: () => s, fsPath: s.replace(/^file:\/\//, '') }) },
 
@@ -74,6 +88,10 @@ function makeApi() {
       },
       registerDefinitionProvider: (selector, provider) => {
         rec.providers.definition.push({ selector, provider });
+        return disposable();
+      },
+      registerCompletionItemProvider: (selector, provider, ...triggers) => {
+        rec.providers.completion.push({ selector, provider, triggers });
         return disposable();
       },
     },

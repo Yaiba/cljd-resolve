@@ -23,7 +23,8 @@
                      \"end\":{\"line\":331,\"character\":27}},
        \"originRange\":{...}}}
 
-   Methods: resolve · warmUp · warmUpLib · ping · clearCache · shutdown.
+   Methods: resolve · complete · describe · warmUp · warmUpLib · ping ·
+   clearCache · shutdown.
 
    `ping` also answers `protocol`, the version of this wire surface -- see
    `protocol-version`."
@@ -120,6 +121,18 @@
       (:offset hit)    (assoc :defRange (def-range hit))
       (:range hit)     (assoc :originRange (origin-range (:range hit))))))
 
+(defn- present-completion
+  "`complete-cursor`'s answer, with both spans converted to the wire's 0-based
+   positions. `items` is always a list -- an empty one says there is nothing to
+   offer here, which is an answer, and never an error."
+  [hit]
+  (when hit
+    (cond-> (select-keys hit [:lib :type :owner :ctor :prefix])
+      true            (assoc :items (vec (:items hit))
+                             :target (some-> (:target hit) name))
+      (:range hit)    (assoc :range (origin-range (:range hit)))
+      (:segment hit)  (assoc :segment (origin-range (:segment hit))))))
+
 ;; --------------------------------------------------------------- dispatch
 
 (defn handle
@@ -157,6 +170,26 @@
       (if-let [a (and file lib (an/for-file file))]
         {:ok true :lib lib :found (an/library? a lib)}
         {:ok false}))
+
+    ;; Completion is `resolve` asked the other way round: not "what is this
+    ;; symbol" but "what could it become". It answers only for the Dart edge --
+    ;; an alias-qualified prefix, a named argument, a `:refer`red name -- and
+    ;; an empty `items` everywhere else, so Calva keeps answering for
+    ;; everything Clojure-shaped in the same list.
+    "complete"
+    (let [{:strs [file text line character col row]} params
+          row (or row (some-> line inc))
+          col (or col (some-> character inc))]
+      (when (and file row col)
+        (present-completion (r/complete-cursor {:file file :text text :row row :col col}))))
+
+    ;; The doc and the full signature for ONE candidate, asked for as the user
+    ;; moves down the list. Sending them with the list instead would put every
+    ;; docstring in a library on the wire for a dropdown that shows one.
+    "describe"
+    (let [{:strs [file lib type label target member ctor]} params]
+      (present (r/describe {:file file :lib lib :type type :label label
+                            :target target :member member :ctor ctor})))
 
     "ping"       {:ok true :protocol protocol-version}
     "clearCache" (do (an/clear-all-caches!) (reset! line-index-cache {}) {:ok true})

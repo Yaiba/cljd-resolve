@@ -111,6 +111,12 @@ class Label extends Widget {
   /// Creates a run of styled text.
   const Label(this.data, {this.style, this.maxLines});
 
+  /// Creates a run of text with several styles.
+  ///
+  /// Reached in the suites as `m/Label.rich` -- the named-constructor shape,
+  /// and the one a `m/Label.` prefix completes to.
+  const Label.rich(this.data, {this.style, this.maxLines});
+
   /// The text to display.
   final String data;
 

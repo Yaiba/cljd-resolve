@@ -7,8 +7,9 @@
 // Dart, rewrite-clj or the analyzer -- the daemon owns all of it.
 //
 // No conflict with Calva: VSCode merges hovers from every provider that
-// answers, and offers multiple definitions as a peek list, so Calva keeps
-// answering for everything Clojure-shaped and we answer for the Dart edge.
+// answers, offers multiple definitions as a peek list, and pools completions
+// from every provider into one list -- so Calva keeps answering for everything
+// Clojure-shaped and we answer for the Dart edge.
 
 const fs = require('fs');
 const os = require('os');
@@ -17,6 +18,7 @@ const vscode = require('vscode');
 
 const { Daemon, protocolComplaint } = require('./client');
 const { hoverMarkdown, summary } = require('./hover');
+const { itemKind, address, documentation } = require('./completion');
 const { fallbackPaths, launcherName, needsShell } = require('./platform');
 
 const SELECTOR = { language: 'clojure', scheme: 'file', pattern: '**/*.cljd' };
@@ -274,6 +276,87 @@ const definitionProvider = {
   },
 };
 
+// Completion is `resolve` asked the other way round, and the daemon decides
+// what is ours to answer: an alias-qualified prefix, a named argument, a
+// `:refer`red name. Everything else comes back with nothing in it, and the
+// list the user sees is Calva's alone.
+//
+// The two characters that open one are `/` and `.`, which are also the two
+// that make a token unreadable -- `m/`, `m.Colors/`, `m/Text.` are not
+// symbols, and the daemon repairs the buffer to classify them.
+const completionProvider = {
+  async provideCompletionItems(document, position, token) {
+    if (!daemon) return null;
+    const trace = Boolean(cfg().get('trace'));
+    let res;
+    try {
+      res = await daemon.request('complete', {
+        file: document.uri.fsPath,
+        text: document.getText(),
+        line: position.line,
+        character: position.character,
+      }, { token, trace });
+    } catch (e) {
+      // A broken daemon means no completions, never a popup -- the same rule
+      // the hover follows.
+      log(`complete failed: ${e.message}`);
+      return null;
+    }
+    if (!res || !res.items || !res.items.length || token.isCancellationRequested) return null;
+    if (trace) log(`<-- ${res.items.length} completion(s) for ${res.target} ${JSON.stringify(res.prefix)}`);
+
+    // The span an accepted candidate replaces: the completing segment, not the
+    // whole token. Without it the editor filters `Scaffold` against `m/Scaf`
+    // -- the alias and the slash included -- and matches nothing.
+    const range = toRange(res.segment) || undefined;
+
+    const items = res.items.map((it) => {
+      const item = new vscode.CompletionItem(it.label, vscode.CompletionItemKind[itemKind(it.kind)]);
+      if (it.detail) item.detail = it.detail;
+      // `sort` carries the group the candidate came from. The editor ranks on
+      // the label alone, and has no way to know that a constructor's named
+      // parameter is a better answer for `.sty` than a field of the same name.
+      if (it.sort) item.sortText = it.sort;
+      if (range) item.range = range;
+      // Read back in resolveCompletionItem, which is the only place a
+      // docstring is fetched.
+      item.cljdAddress = address(res, it);
+      return item;
+    });
+
+    // Incomplete on purpose. The daemon filters to the prefix it was asked
+    // about, so the list is right for that keystroke and not for a shorter
+    // one -- a backspace has to ask again. Each ask is a lookup in a class map
+    // the analyzer already has cached, which is the cheap half of a hover.
+    return new vscode.CompletionList(items, true);
+  },
+
+  // Only ever called for the row the user has highlighted, which is the whole
+  // point: a library's worth of docstrings never goes on the wire for a
+  // dropdown that shows one.
+  async resolveCompletionItem(item, token) {
+    const addr = item.cljdAddress;
+    if (!daemon || !addr || !addr.lib) return item;
+    let hit;
+    try {
+      hit = await daemon.request('describe', Object.assign(
+        { file: vscode.window.activeTextEditor?.document.uri.fsPath }, addr),
+        { token, trace: Boolean(cfg().get('trace')) });
+    } catch (e) {
+      log(`describe failed: ${e.message}`);
+      return item;
+    }
+    if (!hit || token.isCancellationRequested) return item;
+    const md = documentation(hit);
+    if (md) {
+      const doc = new vscode.MarkdownString(md);
+      doc.supportThemeIcons = true;
+      item.documentation = doc;
+    }
+    return item;
+  },
+};
+
 // ------------------------------------------------------------------ warm-up
 
 // Two costs land once per project: the analyzer's first start is a `dart run`
@@ -353,6 +436,10 @@ function activate(context) {
     status,
     vscode.languages.registerHoverProvider(SELECTOR, hoverProvider),
     vscode.languages.registerDefinitionProvider(SELECTOR, definitionProvider),
+    // `/` opens `m/Scaf` and `m.Colors/re`; `.` opens `.style` and
+    // `m/Text.rich`. Both are also typed mid-word, so the provider answers on
+    // an ordinary keystroke too -- these only make the list appear unasked.
+    vscode.languages.registerCompletionItemProvider(SELECTOR, completionProvider, '/', '.'),
 
     vscode.commands.registerCommand('cljd-resolve.showLog', () => out.show(true)),
 

@@ -236,7 +236,7 @@ async function main() {
     // extension.js is loaded against a stubbed `vscode`, talking to a daemon
     // that answers one canned hit -- so what is under test is the wiring
     // between the two, and nothing else.
-    const { rec } = stub.install();
+    const { rec, api } = stub.install();
     rec.config = {
       daemonPath: path.join(repo, 'test', 'fake_daemon.js'),
       extraPath: [],
@@ -323,6 +323,76 @@ async function main() {
       const before = sent('resolve');
       await rec.providers.hover[0].provider.provideHover(doc, { line: 21, character: 4 }, stub.token());
       checkEq(1, sent('resolve') - before, 'a settled share is dropped, not reused');
+    }
+
+    // -------------------------------------------------------- completion
+
+    // Completion goes into the same list Calva's does -- VSCode pools every
+    // provider's items -- so what keeps them apart is what we decline to
+    // answer, not where we answer it.
+    check(rec.providers.completion.length === 1, 'a completion provider is registered');
+    checkEq('/', rec.providers.completion[0].triggers[0], 'triggered by `/`');
+    checkEq('.', rec.providers.completion[0].triggers[1], 'and by `.`');
+    const completions = rec.providers.completion[0].provider;
+
+    {
+      const list = await completions.provideCompletionItems(
+        doc, { line: 16, character: 11 }, stub.token());
+      check(list && list.items.length === 2, 'a completion list comes back', list && list.items);
+      check(list.isIncomplete === true,
+        'marked incomplete -- the daemon filtered to this prefix, so a backspace must ask again');
+
+      const [style, strut] = list.items;
+      checkEq('style', style.label, 'the label is the bare name, not the whole token');
+      checkEq(api.CompletionItemKind.Property, style.kind,
+        'a named parameter shows as a Property -- a name you fill in');
+      checkEq(api.CompletionItemKind.Field, strut.kind, 'a field shows as a Field');
+      checkEq('TextStyle?', style.detail, 'the detail is the one-line type');
+      checkEq('0style', style.sortText,
+        'sortText carries the daemon group, so parameters outrank same-named fields');
+      check(style.sortText < strut.sortText, 'and orders the two groups');
+
+      // The range is what makes filtering work: without it the editor matches
+      // `style` against `m/Text "hi" .sty` and finds nothing.
+      check(style.range && style.range.start.character === 8 && style.range.end.character === 11,
+        'each item replaces the completing segment only', style.range);
+      check(style.range.start.line === 16, 'on the line it was typed on', style.range);
+    }
+
+    // Nothing to offer is answered with nothing at all, so the list the user
+    // sees stays Calva's rather than gaining an empty contribution.
+    checkEq(null, await completions.provideCompletionItems(doc, { line: 40, character: 0 }, stub.token()),
+      'a cursor the daemon has no answer for contributes nothing');
+    checkEq(null, await completions.provideCompletionItems(doc, { line: 41, character: 0 }, stub.token()),
+      'and neither does an empty list');
+
+    {
+      const cancelled = stub.token();
+      const pending = completions.provideCompletionItems(doc, { line: 16, character: 11 }, cancelled);
+      cancelled.cancel();
+      checkEq(null, await pending, 'a cancelled completion answers nothing');
+    }
+
+    // The docstring is fetched for one row, when it is highlighted -- never
+    // with the list. That is the whole reason `describe` exists.
+    {
+      const before = sent('describe');
+      const list = await completions.provideCompletionItems(
+        doc, { line: 16, character: 11 }, stub.token());
+      checkEq(0, sent('describe') - before, 'building the list asks for no docs');
+
+      const item = list.items[0];
+      check(item.cljdAddress && item.cljdAddress.lib === 'package:flutter/material.dart' &&
+            item.cljdAddress.type === 'Text' && item.cljdAddress.label === 'style' &&
+            item.cljdAddress.target === 'named-args',
+        'each item carries the address `describe` needs', item.cljdAddress);
+      check(item.documentation === undefined, 'and no documentation yet');
+
+      const resolved = await completions.resolveCompletionItem(item, stub.token());
+      checkEq(1, sent('describe') - before, 'highlighting one row asks for one doc');
+      check(resolved.documentation && /TextStyle\? style/.test(resolved.documentation.value),
+        'which arrives as the same markdown the hover renders', resolved.documentation);
+      check(/See `TextStyle`/.test(resolved.documentation.value), 'dartdoc references included');
     }
 
     check(rec.output.some((l) => /warm-up ready/.test(l)), 'the daemon is warmed on activation', rec.output);
