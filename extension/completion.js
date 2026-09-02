@@ -29,16 +29,27 @@ function itemKind(kind) {
   return KINDS[kind] || 'Value';
 }
 
-// What `describe` needs to find one candidate again: the library and type the
-// list came from, plus the label. Carried on the item so the editor can ask
-// for a docstring when -- and only when -- the user highlights that row.
+// What `describe` needs to find one candidate again: the file, the library and
+// type the list came from, plus the label. Carried on the item so the editor
+// can ask for a docstring when -- and only when -- the user highlights that
+// row.
+//
+// `file` is passed in rather than read back later from the active editor: the
+// row is resolved some time after the list was built, and by then focus may
+// have moved. An address has to say for itself which document it came from.
+//
+// `lib` is read off the item first and the result second. Most targets share
+// one library and send it once, but `refers` matches names across every
+// library the `ns` form referred to, and each of those candidates carries its
+// own -- there is no result-level library that would be true of all of them.
 //
 // `member` rides along when the key a candidate lives under is not the text
 // the editor inserts: `m/Icons.add` is inserted whole and keyed `add`.
-function address(result, item) {
+function address(result, item, file) {
   if (!result || !item) return null;
   const addr = {
-    lib: result.lib,
+    file,
+    lib: item.lib || result.lib,
     type: result.type,
     target: result.target,
     label: item.label,

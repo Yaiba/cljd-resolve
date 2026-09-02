@@ -94,6 +94,31 @@ const STATUS = {
 let mismatch = null;
 let lastState = 'stopped';
 
+// A daemon old enough to predate `complete`/`describe` answers them -32601,
+// and answers `ping` with the same protocol number this extension was built
+// against -- the version is bumped only when a change would be *misread*, and
+// a method added on the end is not one, so the check above cannot see this.
+//
+// Bumping the protocol would be the wrong fix: it would make an *old*
+// extension report a mismatch against a *new* daemon, where nothing is
+// actually wrong -- `resolve` is unchanged and hovers work. The skew only
+// bites in this one direction, so it is detected in this one direction, by
+// the method that is missing saying so. One log line, then completion stands
+// down for the session and hover and jump carry on.
+let noCompletion = false;
+
+function standDown(method, e) {
+  if (e.code !== -32601) return false;
+  if (!noCompletion) {
+    noCompletion = true;
+    log(`this daemon has no \`${method}\` -- it predates completion. `
+      + 'Hover and jump still work; pull the repo the daemon runs from, or '
+      + 'point `cljd-resolve.daemonPath` at a current one, then run '
+      + '"ClojureDart: Restart resolve daemon".');
+  }
+  return true;
+}
+
 function setState(state) {
   lastState = state;
   if (!status) return;
@@ -286,7 +311,7 @@ const definitionProvider = {
 // symbols, and the daemon repairs the buffer to classify them.
 const completionProvider = {
   async provideCompletionItems(document, position, token) {
-    if (!daemon) return null;
+    if (!daemon || noCompletion) return null;
     const trace = Boolean(cfg().get('trace'));
     let res;
     try {
@@ -299,7 +324,7 @@ const completionProvider = {
     } catch (e) {
       // A broken daemon means no completions, never a popup -- the same rule
       // the hover follows.
-      log(`complete failed: ${e.message}`);
+      if (!standDown('complete', e)) log(`complete failed: ${e.message}`);
       return null;
     }
     if (!res || !res.items || !res.items.length || token.isCancellationRequested) return null;
@@ -320,7 +345,7 @@ const completionProvider = {
       if (range) item.range = range;
       // Read back in resolveCompletionItem, which is the only place a
       // docstring is fetched.
-      item.cljdAddress = address(res, it);
+      item.cljdAddress = address(res, it, document.uri.fsPath);
       return item;
     });
 
@@ -336,14 +361,16 @@ const completionProvider = {
   // dropdown that shows one.
   async resolveCompletionItem(item, token) {
     const addr = item.cljdAddress;
-    if (!daemon || !addr || !addr.lib) return item;
+    if (!daemon || !addr || !addr.lib || !addr.file) return item;
     let hit;
     try {
-      hit = await daemon.request('describe', Object.assign(
-        { file: vscode.window.activeTextEditor?.document.uri.fsPath }, addr),
+      // `addr` already carries the file the list was built from -- the active
+      // editor at this point is whatever the user is looking at now, which is
+      // not necessarily the same document.
+      hit = await daemon.request('describe', addr,
         { token, trace: Boolean(cfg().get('trace')) });
     } catch (e) {
-      log(`describe failed: ${e.message}`);
+      if (!standDown('describe', e)) log(`describe failed: ${e.message}`);
       return item;
     }
     if (!hit || token.isCancellationRequested) return item;
@@ -412,6 +439,7 @@ async function rebuild(context) {
   warmed = new Set();
   mismatch = null;
   checked = false;
+  noCompletion = false;
   const old = daemon;
   daemon = makeDaemon(context);
   if (old) await old.dispose();

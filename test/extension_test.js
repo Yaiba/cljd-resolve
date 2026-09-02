@@ -395,6 +395,45 @@ async function main() {
       check(/See `TextStyle`/.test(resolved.documentation.value), 'dartdoc references included');
     }
 
+    // A `refers` list is the one drawn from more than one library, so the
+    // library cannot ride on the result -- each row carries its own, and
+    // `describe` has to be asked with the row's, not the list's.
+    {
+      const list = await completions.provideCompletionItems(
+        doc, { line: 42, character: 5 }, stub.token());
+      check(list && list.items.length === 2, 'a :refer list comes back', list && list.items);
+      const [pi, print] = list.items;
+      checkEq('dart:math', pi.cljdAddress.lib, 'each row is addressed to its own library');
+      checkEq('dart:core', print.cljdAddress.lib, 'which differs row to row');
+
+      const before = sent('describe');
+      await completions.resolveCompletionItem(pi, stub.token());
+      checkEq(1, sent('describe') - before, 'and a :refer row can be described at all');
+      check(rec.output.some((l) => /"method":"describe"/.test(l) && /dart:math/.test(l)),
+        'with the library the row named', rec.output.slice(-3));
+    }
+
+    // The address says which document it came from. Resolving happens after
+    // the list was built, and by then the focus may be anywhere -- reading the
+    // active editor at that point is reading mutable UI state.
+    {
+      const list = await completions.provideCompletionItems(
+        doc, { line: 16, character: 11 }, stub.token());
+      checkEq('/p/src/acme/main.cljd', list.items[0].cljdAddress.file,
+        'the address carries the originating file');
+
+      const editor = rec.activeTextEditor;
+      rec.activeTextEditor = undefined;
+      try {
+        const before = sent('describe');
+        const resolved = await completions.resolveCompletionItem(list.items[0], stub.token());
+        checkEq(1, sent('describe') - before, 'so a row still resolves with no active editor');
+        check(resolved.documentation, 'and still gets its documentation', resolved.documentation);
+      } finally {
+        rec.activeTextEditor = editor;
+      }
+    }
+
     check(rec.output.some((l) => /warm-up ready/.test(l)), 'the daemon is warmed on activation', rec.output);
     check(rec.status && rec.status.shown === true, 'the status bar shows for a .cljd editor');
     rec.listeners.activeEditor.forEach((fn) => fn({ document: stub.document('/p/other.clj', '') }));
@@ -436,8 +475,42 @@ async function main() {
       delete process.env.CLJD_FAKE_PROTOCOL;
     }
 
+    // A daemon old enough to have no `complete` at all. `ping` cannot show it
+    // -- that daemon reports the same protocol number, since adding a method
+    // is not a change the check is for -- so the missing method reports
+    // itself, once, and completion stands down while hover carries on.
+    process.env.CLJD_FAKE_NO_COMPLETE = '1';
+    try {
+      await rec.commands.get('cljd-resolve.restart')();
+      const before = rec.output.length;
+      checkEq(null, await completions.provideCompletionItems(
+        doc, { line: 16, character: 11 }, stub.token()),
+        'a daemon without `complete` contributes no completions');
+      check(rec.output.slice(before).some((l) => /predates completion/.test(l)),
+        'and says so in the log', rec.output.slice(before));
+
+      const after = rec.output.length;
+      await completions.provideCompletionItems(doc, { line: 16, character: 11 }, stub.token());
+      check(!rec.output.slice(after).some((l) => /"method":"complete"/.test(l)),
+        'the next keystroke does not ask again', rec.output.slice(after));
+      check(!rec.output.slice(after).some((l) => /predates completion/.test(l)),
+        'nor repeat the complaint', rec.output.slice(after));
+
+      const still = await rec.providers.hover[0].provider.provideHover(
+        doc, { line: 16, character: 8 }, stub.token());
+      check(still && still.contents, 'and hover still works -- it is completion that stood down');
+    } finally {
+      delete process.env.CLJD_FAKE_NO_COMPLETE;
+    }
+
     // ... and a matching daemon clears it again.
     await rec.commands.get('cljd-resolve.restart')();
+    {
+      const list = await completions.provideCompletionItems(
+        doc, { line: 16, character: 11 }, stub.token());
+      check(list && list.items.length === 2,
+        'restarting onto a current daemon offers completions again', list && list.items);
+    }
     check(!/warning/.test(rec.status.text),
       'restarting onto a matching daemon clears the warning', rec.status.text);
 

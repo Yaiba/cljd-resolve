@@ -332,10 +332,20 @@
          "and `describe` resolves it"))
 
 ;; A `:refer`red name, answered off the ns table
-(let [r (completing "    p")]
+(let [r  (completing "    p")
+      it (item-of r "pi")]
   (check (= "refers" (:target r)) "a bare symbol reports as :refers" r)
-  (check (offers? r "pi") "offers the :refer'd pi" (labels r))
-  (check (= "dart:math" (:container (item-of r "pi"))) "named against its library" r))
+  (check (some? it) "offers the :refer'd pi" (labels r))
+  (check (= "dart:math" (:container it)) "named against its library" r)
+  ;; The one target whose candidates come from more than one library, so the
+  ;; library is on the item and not on the result -- there is none that would
+  ;; be true of the whole list. Without it the editor has no address to ask
+  ;; `describe` with, and the row is offered with no documentation at all.
+  (check (nil? (:lib r)) "the result names no library, because the list spans several" r)
+  (check (= "dart:math" (:lib it)) "each item carries its own instead" it)
+  (check (some? (rpc "describe" {:file file :lib (:lib it) :label "pi"
+                                 :target (:target r)}))
+         "and `describe` resolves it off that"))
 (check (empty? (:items (completing "    ")))
   "an empty bare prefix offers nothing -- Clojure's own names are Calva's job")
 

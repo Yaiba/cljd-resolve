@@ -322,10 +322,14 @@
   (when (seq prefix)
     (let [hits (for [[nm lib] refers :when (str/starts-with? nm prefix)] [nm lib])]
       (when (seq hits)
+        ;; `:lib` on the item, not on the result. This is the one target whose
+        ;; candidates come from different libraries -- one per `:refer`red
+        ;; name -- so there is no library to hang on the result that would be
+        ;; true of all of them, and `describe` needs one per row.
         {:items (for [[nm lib] hits
                       :let [e (an/element a lib nm)]
                       :when (map? e)]
-                  (item e nm lib 0))}))))
+                  (assoc (item e nm lib 0) :lib lib))}))))
 
 (defn complete-cursor
   "Candidates for the half-typed symbol at 1-based `row`/`col` in `text`.

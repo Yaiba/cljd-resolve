@@ -67,6 +67,12 @@ tells a client which Dart shape it is looking at:
 | `named-args` | `.sty` | named parameters of the enclosing constructor call — named or unnamed — then the class's instance members |
 | `refers` | `pi` | the `:refer`red names in the `ns` form |
 
+`lib` and `type` sit on the result, since one list is normally read out of one
+class in one library. `refers` is the exception: it matches names across every
+library the `ns` form referred to, so there is no library that would be true of
+the whole list and each **item** carries its own `lib` instead. A client builds
+a `describe` address item-first, result second.
+
 `items` is already filtered to `prefix` and sorted by `sort`, which carries the
 group a candidate came from — an editor ranks on the label alone and has no way
 to know a constructor's named parameter is the better answer for `.sty` than a
@@ -94,7 +100,9 @@ a library on the wire for a dropdown that shows one.
 
 The result is a `resolve` result, minus `originRange` — `lib`, `type` and
 `label` are what `complete` already sent, so this is a lookup into a class map
-the analyzer still has cached, not a search.
+the analyzer still has cached, not a search. `file` is only used to find the
+Dart project, as in `resolve`, and should be the file the list was built from
+rather than whatever the editor has focused by the time the row is highlighted.
 
 Two optional params carry what a label alone cannot say. `member` is the key a
 candidate lives under when that differs from the text the editor inserts — a
@@ -131,6 +139,14 @@ says so in its log if the answer is not the number it was built against.
 Deliberately a plain number and not a capability negotiation: there is one client, it lives in
 this repository, and it is installed from this checkout, so the two normally move together and
 the one bit worth having is the one that says when they did not.
+
+That covers one direction only. A client *newer* than its daemon — a `daemonPath` aimed at an
+older clone — asks for a method the daemon has never heard of, and the version it reports is by
+this policy still the right one, so `ping` cannot show it. The missing method reports itself
+instead: `-32601` for `complete` is how the extension learns the daemon predates completion, and
+it says so once and stands completion down for the session while `resolve` carries on. Bumping
+the version to cover this would cost the reverse pair — an old client against this daemon —
+a mismatch warning it has no reason to see.
 
 ## Library URIs the daemon will not send
 

@@ -46,16 +46,46 @@ const COMPLETION = {
   ],
 };
 
-// Two lines stand in for the answers a client has to handle without offering
-// anything: line 40 is a cursor nowhere a Dart name can go, line 41 is a shape
-// with nothing to suggest for it.
+// A `refers` answer, which is the shape with no result-level library: each
+// candidate was matched in a different one of the `ns` form's requires, so the
+// library rides on the item.
+const REFERS = {
+  target: 'refers',
+  prefix: 'p',
+  segment: { start: { line: 42, character: 4 }, end: { line: 42, character: 5 } },
+  range: { start: { line: 42, character: 4 }, end: { line: 42, character: 5 } },
+  items: [
+    { label: 'pi', kind: 'field', detail: 'double',
+      container: 'dart:math', lib: 'dart:math', sort: '0pi' },
+    { label: 'print', kind: 'function', detail: 'void print(Object?)',
+      container: 'dart:core', lib: 'dart:core', sort: '0print' },
+  ],
+};
+
+// Three lines stand in for the answers a client has to handle: line 40 is a
+// cursor nowhere a Dart name can go, line 41 is a shape with nothing to
+// suggest for it, line 42 is a `refers` list drawn from two libraries.
 function completion(params) {
   if (params.line === 40) return null;
   if (params.line === 41) return Object.assign({}, COMPLETION, { items: [] });
+  if (params.line === 42) return REFERS;
   return COMPLETION;
 }
 
+// A daemon from before completion existed. It still answers `ping` with the
+// current protocol -- the number is bumped only for a change a peer would
+// *misread*, and a method added on the end is not one -- so the only thing
+// that gives it away is the method itself coming back unknown.
+const NO_COMPLETE = Boolean(process.env.CLJD_FAKE_NO_COMPLETE);
+
+class RpcError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+
 function answer(req) {
+  if (NO_COMPLETE && (req.method === 'complete' || req.method === 'describe')) {
+    throw new RpcError(-32601, `unknown method: ${req.method}`);
+  }
   switch (req.method) {
     case 'resolve': return HIT;
     case 'complete': return completion(req.params || {});
@@ -76,9 +106,15 @@ process.stdin.on('data', (chunk) => {
     buf = buf.slice(nl + 1);
     if (!line.trim()) continue;
     const req = JSON.parse(line);
-    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: answer(req) }) + '\n');
+    let msg;
+    try {
+      msg = { jsonrpc: '2.0', id: req.id, result: answer(req) };
+    } catch (e) {
+      msg = { jsonrpc: '2.0', id: req.id, error: { code: e.code, message: e.message } };
+    }
+    process.stdout.write(JSON.stringify(msg) + '\n');
     if (req.method === 'shutdown') process.exit(0);
   }
 });
 
-module.exports = { HIT, LIBS, PROTO, COMPLETION };
+module.exports = { HIT, LIBS, PROTO, COMPLETION, REFERS };
