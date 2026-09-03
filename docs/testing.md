@@ -68,8 +68,9 @@ declarations or imports beyond the four doc/location ones. Two files read and co
 helper backed off rather than recompiled on every hover. Plus which library URIs are allowed to
 reach the helper at all, proved by what does and does not get written to it. No Dart.
 
-**`test/parse_test.clj`** — the alias table, symbol classification, owner candidates, unbalanced
-buffers, Dart rendering, and offset → line/column. No subprocess, so it runs in a blink.
+**`test/parse_test.clj`** — the alias table, symbol classification, owner candidates, buffers
+mid-edit (unbalanced, or holding a token that cannot be read), Dart rendering, and offset →
+line/column. No subprocess, so it runs in a blink.
 
 **`test/extension_test.js`** — plain node, no VSCode and no Dart. Covers the dartdoc-to-markdown
 rendering, the daemon client (concurrency, cancellation, timeouts, a daemon that will not start),

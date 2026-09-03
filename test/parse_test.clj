@@ -80,6 +80,93 @@
 (check (nil? (parse/cursor-info "(m/Text ;; ( unclosed paren in a comment\n" [1 20]))
   "a `(` inside a comment is not counted as open")
 
+;; ------------------------------------------- unreadable tokens in the buffer
+;;
+;; rewrite-clj reads the buffer as a whole, so a token it cannot read -- `m/`
+;; left mid-edit in one function -- used to take the alias table and every
+;; hover in the file down with it.
+
+(println "\nunreadable tokens elsewhere in the buffer")
+
+(def stale
+  (str/join "\n"
+    ["(ns a"
+     "  (:require [\"package:flutter/material.dart\" :as m]"
+     "            [\"dart:math\" :refer [pi]]))"
+     ""
+     "(defn half-typed []"
+     "  (m/ 1.2.3))"                          ; neither token reads
+     ""
+     "(defn done [] (m/Text \"hi\" .style pi))"]))
+
+(check= {"m" "package:flutter/material.dart"} (:aliases (parse/ns-info stale))
+  "the ns table survives a half-typed symbol in a later form")
+(check= {"pi" "dart:math"} (:refers (parse/ns-info stale))
+  "and so does the :refer table")
+(check= "m/Text" (:symbol (parse/cursor-info stale [8 16]))
+  "a symbol in another form still resolves")
+(check= [[8 16] [8 22]] (:range (parse/cursor-info stale [8 16]))
+  "positions are unshifted -- the repair rewrites in place, character for character")
+(check= "m/Text" (first (:owners (parse/cursor-info stale [8 28])))
+  ".style still finds its owner")
+(check= {:target :library :alias "m" :prefix "Te"}
+  (select-keys (parse/completion-info (str stale "\n(m/Te") [9 6])
+               [:target :alias :prefix])
+  "completion still fires elsewhere in the buffer")
+(check= {"m" "package:flutter/material.dart"}
+  (:aliases (:ns (parse/completion-context (str stale "\n(m/") [9 4])))
+  "and completion-context still reads the alias it needs to resolve against")
+(check (nil? (parse/cursor-info stale [6 6]))
+  "the broken token itself resolves to nothing, as it did before")
+
+(check= "m/Text" (:symbol (parse/cursor-info "(m/Text \"hi\" .style (m/))" [1 2]))
+  "an unreadable token and an unclosed form at once")
+
+;; Every other way a token can come out unreadable, each of which used to take
+;; the buffer with it just the same.
+(doseq [[label body] [[":"                 "(defn f [] :)"]
+                      ["::"                "(defn f [] ::)"]
+                      [":::"               "(defn f [] :::)"]
+                      [":::foo"            "(defn f [] :::foo)"]
+                      ["::x/y/z"           "(defn f [] ::x/y/z)"]
+                      ["foo#/"             "(defn f [] foo#/)"]
+                      ["a dangling `#`"    "(defn f [] (map # xs))"]
+                      ["a dangling `^`"    "(defn f [] (x ^))"]
+                      ["a `#(` half typed" "(defn f [] (map #"]]]
+  (let [src (str "(ns a (:require [\"package:flutter/material.dart\" :as m]))\n"
+                 body "\n(defn done [] (m/Text \"hi\"))")]
+    (check= {"m" "package:flutter/material.dart"} (:aliases (parse/ns-info src))
+      (str "the ns table survives " label))
+    (check= "m/Text" (:symbol (parse/cursor-info src [3 16]))
+      (str "and a symbol elsewhere still resolves past " label))))
+;; -- which is only true because the rewrite is checked before it is used: a
+;; `:::foo` that kept all three colons would read no better than it did.
+
+;; Reader syntax -- `^:no-doc`, the `#` of a `#(` -- reads as nothing on its own
+;; but is not broken, and rewriting it would flatten the structure it carries.
+;; So the repaired buffer has to answer exactly what the same buffer answers
+;; before the token that breaks it is typed: same nodes, not just same offsets.
+(let [healthy
+      (str/join "\n"
+        ["(ns ^:no-doc a (:require [\"package:flutter/material.dart\" :as m]))"
+         "(defn ^:private f [xs]"
+         "  (map #(m/Text \"hi\" .style %) xs))"])
+      broken (str healthy "\n(defn g [] (m.Colors/))")]  ; ... and now it is
+  (check (some? (parse/cursor-info healthy [3 10]))
+    "the buffer this is measured against parses on its own")
+  (doseq [[r c label] [[3 10 "m/Text inside a `#()`"] [3 22 ".style inside it"]]]
+    (check= (parse/cursor-info healthy [r c]) (parse/cursor-info broken [r c])
+      (str label " reads the same either side of the repair")))
+  (check= 'a (:ns (parse/ns-info broken))
+    "metadata on the ns form survives, so :ns is the namespace and not a filler")
+  (check= {"m" "package:flutter/material.dart"} (:aliases (parse/ns-info broken))
+    "and the alias table with it"))
+
+(check= "pi" (:symbol (parse/cursor-info ";; m/ in a comment stays put\npi" [2 1]))
+  "a comment is not scanned for tokens")
+(check= "m/Text" (:symbol (parse/cursor-info "(m/Text \"m/ in a string\" x)" [1 2]))
+  "nor is a string")
+
 ;; ----------------------------------------------------------------- classify
 
 (println "\nclassify")
@@ -211,6 +298,8 @@
 (check (nil? (typing "(m/Text \"hi" 11)) "inside a string literal")
 (check (nil? (typing "(m/Text ;; a comment" 15)) "inside a comment")
 (check (nil? (typing "(m/Text" 3)) "m|/Text -- the cursor is before the segment")
+(check (nil? (typing "(a/b/" 6))
+  "a token the sentinel cannot rescue either -- repaired, so nothing to complete")
 (check= {:target :refers :prefix ""} (shape "  " 2 [:target :prefix])
   "whitespace reports an empty bare prefix, not nil -- the policy lives downstream")
 (check (nil? (parse/completion-info "(m/Scaf" [9 2])) "a row past the end of the buffer")

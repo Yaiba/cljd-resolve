@@ -126,9 +126,17 @@ For `Text` that is 375 characters against the class's 4228. A symbol that is *no
 gives for a bare type reference. Where the constructor carries no doc of its own, the class is
 still the better answer and is kept.
 
-**Unbalanced buffers.** A buffer being typed into is unbalanced most of the time and rewrite-clj
-refuses it, so on a parse failure the daemon appends the missing delimiters and reparses. Only
-appending, so every position before the cursor is untouched.
+**Buffers being typed into.** A buffer being typed into is unbalanced most of the time and
+rewrite-clj refuses it, so on a parse failure the daemon appends the missing delimiters and
+reparses. Only appending, so every position before the cursor is untouched.
+
+A token rewrite-clj cannot *read* — a half-typed `m/` or `m.Colors/` left in some other
+function, a lone `:`, the `#` of a `#(` on its way to being typed — fails that same whole-buffer
+parse, and used to take the alias table and every hover in the file down with it. So those are rewritten in place with a readable filler of the same length:
+the unfinished token resolves to nothing, as it did before, and everything around it goes on
+resolving. Reader syntax reads as nothing on its own too — `^:no-doc`, the `#` of a `#(` — but
+is not broken when the form it belongs to is there, and is left alone, structure and all; a
+repaired buffer answers exactly what it will answer once the unfinished token is finished.
 
 **What it gives up on**, exactly as design.md §3 says route B would: `(.substring s 1)` — a
 method call on a value — needs real type inference, and returns null rather than a guess.

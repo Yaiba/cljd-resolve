@@ -7,9 +7,21 @@
    `owner-candidates` hand back *candidates*, and cljd-resolve.resolve decides
    which one actually resolves."
   (:require [clojure.string :as str]
+            [rewrite-clj.parser :as p]
             [rewrite-clj.zip :as z]))
 
 ;; ---------------------------------------------------------------- ns parsing
+
+(defn- string-end
+  "The index just past the closing quote of the string opening at `i`, or nil
+   when it never closes."
+  [^String text i]
+  (let [n (count text)]
+    (loop [j (inc i)]
+      (cond (>= j n)                nil
+            (= \\ (.charAt text j)) (recur (+ j 2))
+            (= \" (.charAt text j)) (inc j)
+            :else                   (recur (inc j))))))
 
 (defn- balance
   "The delimiters `text` is missing, innermost first, or nil when it is already
@@ -28,23 +40,127 @@
           (case c
             \; (recur (let [j (.indexOf text "\n" i)] (if (neg? j) n (inc j))) stack false)
             \\ (recur (+ i 2) stack false)          ; \c character literal
-            \" (let [end (loop [j (inc i)]
-                           (cond (>= j n) nil
-                                 (= \\ (.charAt text j)) (recur (+ j 2))
-                                 (= \" (.charAt text j)) (inc j)
-                                 :else (recur (inc j))))]
-                 (if end (recur end stack false) (recur n stack true)))
+            \" (if-let [end (string-end text i)]
+                 (recur end stack false)
+                 (recur n stack true))
             (\( \[ \{) (recur (inc i) (conj stack (case c \( \) \[ \] \{ \})) false)
             (\) \] \}) (recur (inc i) (if (= c (first stack)) (rest stack) stack) false)
             (recur (inc i) stack false)))))))
 
+(def ^:private token-break
+  "Characters that end a bare token: whitespace and the delimiters. Strings,
+   character literals and comments end one too -- `token-spans` handles those
+   itself, since it has to skip over them anyway.
+
+   Nothing else does, reader syntax included: `#`, `'`, `^` and friends are
+   read together with whatever follows them, so `foo#/` is judged as the one
+   unreadable token it is, and a dispatch left dangling mid-edit -- the `#` of
+   a `#(` on its way to being typed -- is one `repair` can fix."
+  (set " \t\r\n\f,()[]{}"))
+
+(defn- token-spans
+  "The `[start end)` spans of the bare tokens in `text` -- symbols, numbers and
+   keywords. Skips strings, character literals and line comments, like
+   `balance`."
+  [^String text]
+  (let [n (count text)]
+    (loop [i 0, start nil, acc []]
+      (if (>= i n)
+        (cond-> acc start (conj [start i]))
+        (let [c    (.charAt text i)
+              ;; a break -- the token in progress ends at `i`, and the scan
+              ;; picks back up here
+              past (case c
+                     \; (let [j (.indexOf text "\n" i)] (if (neg? j) n (inc j)))
+                     \\ (+ i 2)                       ; \c character literal
+                     \" (or (string-end text i) n)
+                     (when (token-break c) (inc i)))]
+          (if past
+            (recur past nil (cond-> acc start (conj [start i])))
+            (recur (inc i) (or start i) acc)))))))
+
+(def ^:private filler
+  "The character an unreadable token is rewritten with. Deliberately not the
+   completion `sentinel`: `info-at` tells the two apart to know whether the
+   token under the cursor is one it repaired."
+  \z)
+
+(defn- readable?
+  "Whether rewrite-clj can read `s` on its own."
+  [s]
+  (try (p/parse-string s) true (catch Exception _ false)))
+
+(defn- form-start
+  "The index of the next form at or after `i` -- whitespace and comments
+   skipped -- or nil when the form `i` sits in ends first, or the buffer does."
+  [^String text i]
+  (let [n (count text)]
+    (loop [j i]
+      (let [c (when (< j n) (.charAt text j))]
+        (cond
+          (nil? c)                     nil
+          (or (Character/isWhitespace c) (= \, c)) (recur (inc j))
+          (= \; c)                     (let [k (.indexOf text "\n" j)]
+                                         (when-not (neg? k) (recur (inc k))))
+          (#{\) \] \}} c)              nil
+          :else                        j)))))
+
+(defn- attached?
+  "Whether the token `s` ending at `end` reads as nothing on its own only
+   because it is a reader prefix -- `^:no-doc`, `#`, `#_`, `'` -- standing in
+   front of a form that is really there. Then it is valid code: `repair` must
+   leave it alone, metadata and all, rather than flatten it into a symbol.
+
+   A `#` binds to whatever comes immediately next, so `#(` is attached and
+   `# (` is not; every other prefix may have whitespace before its form."
+  [^String text s end]
+  (and (readable? (str s "{} x"))       ; a map and a value: enough for any prefix
+       (if (str/ends-with? s "#")
+         (= end (form-start text end))
+         (some? (form-start text end)))))
+
+(defn- rewritten
+  "A token of exactly `s`'s length that rewrite-clj can read, to stand in for
+   the unreadable `s`. A keyword keeps the `:` or `::` it opens with, so it is
+   rewritten into a keyword rather than a symbol -- but only where that leaves
+   something readable (`:::foo` does not) and something to rewrite (`:` is all
+   colon), so the answer is checked before it is handed back. All filler always
+   reads: a token holds no whitespace or delimiter to interrupt it."
+  [s]
+  (letfn [(fill [i] (apply str (concat (take i s) (repeat (- (count s) i) filler))))]
+    (let [kept (fill (min 2 (count (take-while #(= \: %) s))))]
+      (if (readable? kept) kept (fill 0)))))
+
+(defn- repair
+  "`text` with every token rewrite-clj refuses to read -- a half-typed `m/`,
+   `m.Colors/`, `1.2.3`, a `^` still waiting for whatever it hangs off --
+   overwritten character for character with a readable one.
+
+   rewrite-clj reads the buffer as a whole, so without this a single unfinished
+   symbol anywhere takes the alias table and every hover in the file with it.
+   Same length, so every position outside the broken token is where it was, and
+   nothing a delimiter is nested in moves. Reader syntax standing in front of
+   the form it belongs to reads as nothing on its own but is not broken, and is
+   left as it is -- see `attached?`."
+  [^String text]
+  (let [sb (StringBuilder. text)]
+    (doseq [[start end] (token-spans text)
+            :let  [s (subs text start end)]
+            :when (and (not (readable? s)) (not (attached? text s end)))]
+      (.replace sb start end (rewritten s)))
+    (str sb)))
+
 (defn- zip-of
-  "A position-tracking zipper over `text`, closing it off first if it does not
-   parse -- so a hover works halfway through typing a form."
+  "A position-tracking zipper over `text`, repaired first if it does not parse:
+   delimiters left open are closed off, and tokens that cannot be read are
+   rewritten -- so a hover works halfway through typing a form, and goes on
+   working everywhere else while one sits unfinished."
   [text]
-  (letfn [(zip [s] (try (z/of-string s {:track-position? true}) (catch Exception _ nil)))]
-    (or (zip text)
-        (when-let [cs (balance text)] (zip (str text (apply str cs)))))))
+  (letfn [(zip [s] (try (z/of-string s {:track-position? true}) (catch Exception _ nil)))
+          (closed [s] (or (zip s) (when-let [cs (balance s)] (zip (str s (apply str cs))))))]
+    (or (closed text)
+        (let [fixed (repair text)]
+          (when (not= fixed text) (closed fixed))))))
 
 (defn- top-level [text]
   (when-let [zloc (zip-of text)]
@@ -230,7 +346,7 @@
    character does -- it is removed by index, never by name -- and it never
    leaves this namespace: it goes into the buffer handed to rewrite-clj and
    comes straight back out of every string reported from here."
-  "X")
+  \X)
 
 (defn- cursor-at
   "1-based `[row col]` in `text` as `[offset col]`, both clamped to the end of
@@ -284,13 +400,18 @@
     (let [[[r1 c1] [r2 c2]] (:range cur)
           kind (:kind cur)
           i    (- col c1)                  ; the sentinel's index in the token
-          s    (strip-at (:symbol cur) i)  ; the token as actually typed
+          sym  (:symbol cur)
+          s    (strip-at sym i)            ; the token as actually typed
           seg  (segment-start kind s)]
       ;; The sentinel is what makes the token parse, so everything left of it
       ;; -- the alias, the `/`, the leading `.` -- is already clean. A cursor
       ;; *before* the segment is asking to complete something that is not a
       ;; name: `m|/Text`, or the `.` of `.style`.
-      (when (<= seg i)
+      ;;
+      ;; A token without the sentinel where it was spliced is one `repair`
+      ;; rewrote: what is being typed there could not be read even with the
+      ;; sentinel in it, and there is nothing to complete against.
+      (when (and (= sentinel (nth sym i nil)) (<= seg i))
         (let [tail   (subs s seg)                    ; the whole segment
               quali  (when (= :qualified kind) (subs s 0 (dec seg)))
               target (case kind
